@@ -1,0 +1,17 @@
+# Ignore Arduino Build files
+*.hex
+*.elf
+*.bin
+build/
+
+# Ignore Python Cache (for your backend)
+__pycache__/
+*.pyc
+venv/
+
+# Ignore Node Modules (for your app)
+node_modules/
+.env
+
+# MacOS junk
+.DS_Store
