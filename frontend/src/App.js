@@ -1,143 +1,80 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Shield, Activity, Terminal, Camera, RefreshCw, Server, Cpu } from 'lucide-react';
+import React, { useState } from 'react';
+import { Loader2 } from 'lucide-react'; // The spinning loading icon
+import VisionDashboard from './page/vision_dashboard';
+import MainDashboard from './page/main_dashboard';
+import ToolManagement from './page/tool_management';
 
 function App() {
-  const [logs, setLogs] = useState([]);
-  const [videoKey, setVideoKey] = useState(Date.now());
-  const logsEndRef = useRef(null);
+  const [currentPage, setCurrentPage] = useState('home');
+  
+  // New Global States for our Loading Toast
+  const [isTransitioning, setIsTransitioning] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('');
 
-  // New strict connection states
-  const [backendConnected, setBackendConnected] = useState(false);
-  const [deviceConnected, setDeviceConnected] = useState(false);
-
-  useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
-
-  useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/ws/dashboard');
-
-    ws.onopen = () => {
-      setBackendConnected(true);
-      setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: "SUCCESS: Connected to AI Backend Server.", type: "info" }]);
-      setTimeout(() => setVideoKey(Date.now()), 1000); 
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        // Handle explicit status updates from the Python server
-        if (data.type === "status") {
-            setDeviceConnected(data.device_connected);
-        }
-
-        // Handle standard logs
-        if (data.log) {
-          const isHazard = data.log.includes("HAZARD");
-          const isWarning = data.log.includes("WARNING");
-          
-          setLogs(prev => [...prev, { 
-            time: new Date().toLocaleTimeString(), 
-            text: data.log, 
-            type: isHazard ? "alert" : isWarning ? "error" : "normal" 
-          }]);
-        }
-      } catch (e) {}
-    };
-
-    ws.onclose = () => {
-      setBackendConnected(false);
-      setDeviceConnected(false); // If backend dies, device connection is implicitly lost
-      setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: "CRITICAL ERROR: AI Backend Disconnected.", type: "error" }]);
-    };
-
-    return () => ws.close();
-  }, []);
+  // Universal navigation handler with a simulated loading effect
+  const handleNavigation = (targetPage, message) => {
+    setLoadingMessage(message);
+    setIsTransitioning(true);
+    
+    // Simulate a brief loading delay before actually switching the page
+    setTimeout(() => {
+      setCurrentPage(targetPage);
+      setIsTransitioning(false);
+    }, 800); // 800ms gives the user just enough time to read the notification
+  };
 
   return (
-    <div style={{ backgroundColor: '#0f172a', color: '#e2e8f0', height: '100vh', display: 'flex', flexDirection: 'column', padding: '20px', boxSizing: 'border-box', fontFamily: 'system-ui, sans-serif' }}>
+    <div className="App" style={{ margin: 0, padding: 0, overflow: 'hidden', backgroundColor: '#0f172a', position: 'relative' }}>
       
-      <header style={{ flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #1e293b', paddingBottom: '15px', marginBottom: '20px' }}>
-        <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '12px', fontSize: '24px', color: '#38bdf8' }}>
-          <Shield size={28} /> Assistive Vision AI Console
-        </h1>
-        
-        {/* Professional 2-Part Status Monitor */}
-        <div style={{ display: 'flex', gap: '12px' }}>
-            
-            {/* Backend Server Status Badge */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#1e293b', padding: '6px 12px', borderRadius: '6px', border: `1px solid ${backendConnected ? '#22c55e' : '#ef4444'}` }}>
-              <Server size={16} color={backendConnected ? "#22c55e" : "#ef4444"} />
-              <span style={{ fontSize: '13px', fontWeight: 'bold', color: backendConnected ? "#22c55e" : "#ef4444" }}>
-                Host: {backendConnected ? "ONLINE" : "OFFLINE"}
-              </span>
-            </div>
-
-            {/* ESP32 Device Status Badge */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#1e293b', padding: '6px 12px', borderRadius: '6px', border: `1px solid ${deviceConnected ? '#38bdf8' : '#64748b'}` }}>
-              <Cpu size={16} color={deviceConnected ? "#38bdf8" : "#64748b"} />
-              <span style={{ fontSize: '13px', fontWeight: 'bold', color: deviceConnected ? "#38bdf8" : "#64748b" }}>
-                Edge Device (need to rename): {deviceConnected ? "STREAMING" : "DISCONNECTED"}
-              </span>
-            </div>
-
-        </div>
-      </header>
-
-      <main style={{ flex: 1, display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '24px', minHeight: 0 }}>
-        
-        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <div style={{ flexShrink: 0, marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#94a3b8', fontWeight: 'bold' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><Camera size={20} /> LIVE EDGE VISION</div>
-            
-            <button onClick={() => setVideoKey(Date.now())} style={{ background: 'none', border: 'none', color: '#38bdf8', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}>
-              <RefreshCw size={16} /> Force Reload Sync
-            </button>
-          </div>
+      {/* GLOBAL LOADING NOTIFICATION TOAST */}
+      {isTransitioning && (
+        <div style={{
+          position: 'fixed',
+          bottom: '24px',
+          right: '24px',
+          backgroundColor: 'rgba(30, 41, 59, 0.9)', // Dark frosted glass
+          backdropFilter: 'blur(12px)',
+          border: '1px solid #334155',
+          padding: '14px 24px',
+          borderRadius: '12px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          color: '#f8fafc',
+          zIndex: 9999, // Ensure it's above EVERYTHING else on the screen
+          boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
+          animation: 'slideIn 0.3s ease-out'
+        }}>
+          {/* CSS Animations for the sliding entry and spinning icon */}
+          <style>{`
+            @keyframes spin { 100% { transform: rotate(360deg); } }
+            @keyframes slideIn { 
+              from { transform: translateX(120%); opacity: 0; } 
+              to { transform: translateX(0); opacity: 1; } 
+            }
+          `}</style>
           
-          <div style={{ flex: 1, backgroundColor: '#000', borderRadius: '12px', overflow: 'hidden', border: '2px solid #334155', display: 'flex', justifyContent: 'center', alignItems: 'center', position: 'relative' }}>
-            {/* Show an offline overlay if the device drops out */}
-            {!deviceConnected && (
-                <div style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.8)', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', color: '#ef4444', zIndex: 10 }}>
-                    <Activity size={48} style={{ marginBottom: '16px', opacity: 0.5 }} />
-                    <h2 style={{ margin: 0 }}>NO VIDEO SIGNAL</h2>
-                    <p style={{ color: '#94a3b8', fontSize: '14px' }}>Awaiting ESP32 hardware connection...</p>
-                </div>
-            )}
-            <img 
-              key={videoKey}
-              src={`http://localhost:8000/video_feed?t=${videoKey}`} 
-              alt="Stream inactive" 
-              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
-            />
-          </div>
+          <Loader2 size={18} color="#38bdf8" style={{ animation: 'spin 1s linear infinite' }} />
+          <span style={{ fontSize: '13px', fontWeight: '500', letterSpacing: '0.5px' }}>{loadingMessage}</span>
         </div>
+      )}
 
-        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <div style={{ flexShrink: 0, marginBottom: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#94a3b8', fontWeight: 'bold' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><Terminal size={20} /> AI EVENT TERMINAL</div>
-            <button onClick={() => setLogs([])} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '12px' }}>Clear Output</button>
-          </div>
-          
-          <div style={{ flex: 1, backgroundColor: '#020617', borderRadius: '12px', border: '2px solid #334155', padding: '16px', overflowY: 'auto', fontFamily: 'monospace', fontSize: '14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {logs.map((log, index) => (
-              <div key={index} style={{ 
-                color: log.type === 'alert' ? '#ef4444' : log.type === 'error' ? '#f59e0b' : log.type === 'info' ? '#38bdf8' : '#22c55e',
-                borderBottom: '1px solid #1e293b',
-                paddingBottom: '8px',
-                lineHeight: '1.5',
-                wordBreak: 'break-word'
-              }}>
-                <span style={{ color: '#64748b', marginRight: '8px' }}>[{log.time}]</span>
-                {log.text}
-              </div>
-            ))}
-            <div ref={logsEndRef} />
-          </div>
-        </div>
+      {/* PAGE ROUTING (Passing the new handleNavigation function) */}
+      {currentPage === 'home' && (
+        <MainDashboard 
+          onNavigateVision={() => handleNavigation('vision', 'Initializing Vision Engine...')} 
+          onNavigateTools={() => handleNavigation('tools', 'Accessing Tool Repository...')} 
+        />
+      )}
+      
+      {currentPage === 'vision' && (
+        <VisionDashboard onNavigate={() => handleNavigation('home', 'Closing Console...')} />
+      )}
 
-      </main>
+      {currentPage === 'tools' && (
+        <ToolManagement onNavigate={() => handleNavigation('home', 'Returning to Control Center...')} />
+      )}
+      
     </div>
   );
 }
