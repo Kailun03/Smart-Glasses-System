@@ -50,4 +50,4 @@ def analyze_frame(image_bytes: bytes) -> tuple[str, str]:
         log_message = f"HAZARD DETECTED: {', '.join(detected_objects)}"
         return "ALERT: MOTOR_ON", log_message
     else:
-        return "SAFE", "Coast is clear."
+        return "SAFE", "SAFE"

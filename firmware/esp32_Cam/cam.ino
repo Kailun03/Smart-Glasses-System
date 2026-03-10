@@ -11,7 +11,7 @@ const char* password = "Kailun2003";
 // ==========================================
 // 2. Ngrok WebSocket Configuration
 // ==========================================
-const char* ws_host = "marcel-brutelike-conciliatingly.ngrok-free.dev";
+const char* ws_host = "tabs-karaoke-lists-jersey.trycloudflare.com";
 const int ws_port = 443; // Port 443 is required for secure connections (wss://)
 const char* ws_url = "/ws";
 
@@ -92,7 +92,7 @@ void setup() {
   
   // High speed AI settings
   config.xclk_freq_hz = 20000000;       
-  config.frame_size = FRAMESIZE_QVGA;   
+  config.frame_size = FRAMESIZE_VGA;   
   config.pixel_format = PIXFORMAT_JPEG; 
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
   config.fb_location = CAMERA_FB_IN_PSRAM;
@@ -136,18 +136,13 @@ void setup() {
 void loop() {
   webSocket.loop();
 
-  // Only take a picture if Python specifically asked for one
-  if (send_next_frame && webSocket.isConnected()) {
-    camera_fb_t * fb = esp_camera_fb_get();
-    
-    if (fb) {
-      webSocket.sendBIN(fb->buf, fb->len);
-      esp_camera_fb_return(fb);
-    }
-    
-    // Reset the flag so we don't send another one until Python asks again
-    send_next_frame = false; 
+  camera_fb_t * fb = esp_camera_fb_get();
+  
+  if (fb) {
+    webSocket.sendBIN(fb->buf, fb->len);
+    esp_camera_fb_return(fb);
+    last_frame_time = millis(); // Reset the timer
   }
   
-  delay(1); // Essential 1ms delay to keep the WiFi chip from crashing
+  delay(10); // Essential 10ms delay to keep the WiFi chip from crashing
 }
