@@ -174,7 +174,7 @@ function MainDashboard({ onNavigateVision }) {
         }
 
         .hero-card {
-          background: linear-gradient(135deg, rgba(15, 23, 42, 1) 0%, rgba(2, 6, 23, 1) 100%);
+          background: linear-gradient(135deg, rgb(51, 78, 99) 0%, rgb(2, 4, 12) 100%);
           border-radius: 24px;
           padding: 40px;
           display: flex;
@@ -190,7 +190,7 @@ function MainDashboard({ onNavigateVision }) {
           position: absolute;
           top: -40px;
           right: -40px;
-          opacity: 0.03;
+          opacity: 0.07;
           transform: rotate(-15deg);
         }
 
