@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Terminal, RefreshCw, Server, Cpu, Glasses, LogOut, Battery, Navigation } from 'lucide-react';
+import { Activity, Terminal, Trash2, Server, Cpu, Glasses, LogOut, Battery, Navigation } from 'lucide-react';
 
 function VisionDashboard({ onNavigate }) {
   const [logs, setLogs] = useState([]);
@@ -60,31 +60,75 @@ function VisionDashboard({ onNavigate }) {
       <style>{`
         /* Target only our log container */
           .custom-log-container::-webkit-scrollbar {
-              width: 5px; /* modern, narrow width */
-              margin-right: -5px; /* pulls the scrollbar slightly towards the edge */
+              width: 5px; 
+              margin-right: -5px; 
           }
           
-          /* The track (path the thumb moves along) - transparent to match sidebar background */
           .custom-log-container::-webkit-scrollbar-track {
               background: transparent; 
           }
           
-          /* The thumb (the draggable part) - uses matching slate gray from Figma design */
           .custom-log-container::-webkit-scrollbar-thumb {
-              background-color: #475569; /* slate-gray-600 */
-              border-radius: 4px; /* matching border radii of pills */
-              border: 1px solid transparent; /* adds visual padding to make the thumb look rounded */
+              background-color: #475569; 
+              border-radius: 4px; 
+              border: 1px solid transparent; 
           }
 
-          /* Subtle hover effect for interactivity */
           .custom-log-container::-webkit-scrollbar-thumb:hover {
-              background-color: #64748b; /* slate-gray-500, slightly lighter on hover */
+              background-color: #64748b; 
           }
 
           /* Subtle Breathing Animation */
           @keyframes subtleBreathe {
               0%, 100% { opacity: 0.6; }
               50% { opacity: 1; }
+          }
+
+          /* NEW: Custom Animated Tooltip */
+          .clear-btn-container {
+              position: relative;
+              display: inline-flex;
+              align-items: center;
+          }
+          
+          .custom-tooltip {
+              visibility: hidden;
+              opacity: 0;
+              background-color: #1e293b;
+              color: #f8fafc;
+              border: 1px solid #334155;
+              text-align: center;
+              border-radius: 6px;
+              padding: 6px 12px;
+              position: absolute;
+              z-index: 100;
+              top: 130%; /* Drop it just below the button */
+              right: 0; /* Align it to the right edge */
+              font-size: 11px;
+              white-space: nowrap;
+              font-weight: 600;
+              letter-spacing: 0.5px;
+              transform: translateY(-8px); /* Start slightly high */
+              transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+              box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+          }
+          
+          /* Tooltip little up-arrow pointer */
+          .custom-tooltip::after {
+              content: "";
+              position: absolute;
+              bottom: 100%;
+              right: 8px; /* Arrow position */
+              border-width: 5px;
+              border-style: solid;
+              border-color: transparent transparent #1e293b transparent;
+          }
+
+          /* Hover triggers the animation */
+          .clear-btn-container:hover .custom-tooltip {
+              visibility: visible;
+              opacity: 1;
+              transform: translateY(0); /* Slide down smoothly */
           }
       `}</style>
 
@@ -120,8 +164,8 @@ function VisionDashboard({ onNavigate }) {
             position: 'absolute', 
             top: '20px', 
             left: '20px', 
-            backgroundColor: 'rgba(0, 0, 0, 0.4)', // Highly transparent
-            backdropFilter: 'blur(12px)', // Frosted glass effect
+            backgroundColor: 'rgba(0, 0, 0, 0.4)', 
+            backdropFilter: 'blur(12px)', 
             padding: '8px 16px', 
             borderRadius: '24px', 
             display: 'flex', 
@@ -201,9 +245,20 @@ function VisionDashboard({ onNavigate }) {
             <Terminal size={16} />
             Terminal
           </div>
-          <button onClick={() => setLogs([])} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center' }} title="Clear Logs">
-            <RefreshCw size={14} />
-          </button>
+          
+          {/* NEW: Animated Tooltip Wrapper & Updated Icon */}
+          <div className="clear-btn-container">
+            <button 
+              onClick={() => setLogs([])} 
+              style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'color 0.2s ease' }} 
+              onMouseOver={(e) => e.currentTarget.style.color = '#ef4444'} 
+              onMouseOut={(e) => e.currentTarget.style.color = '#64748b'}
+            >
+              <Trash2 size={16} />
+            </button>
+            <span className="custom-tooltip">Clear Logs</span>
+          </div>
+
         </div>
 
         {/* Logs Container */}
