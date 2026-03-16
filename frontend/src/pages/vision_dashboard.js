@@ -1,9 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Activity, Terminal, Trash2, Server, Cpu, Glasses, LogOut, Battery, Navigation } from 'lucide-react';
 
+const SYSTEM_MODES = {
+  NORMAL: { id: 'NORMAL', label: 'Normal Mode', color: 'transparent' },
+  NAVIGATION: { id: 'NAVIGATION', label: 'Navigation Mode', color: '#22c55e' },
+  OCR: { id: 'OCR', label: 'OCR Text Mode', color: '#f59e0b' },                 
+  TOOL: { id: 'TOOL', label: 'Tool Recognition', color: '#38bdf8' }
+};
+
 function VisionDashboard({ onNavigate }) {
   const [logs, setLogs] = useState([]);
   const [videoKey, setVideoKey] = useState(Date.now());
+  const [activeMode, setActiveMode] = useState(SYSTEM_MODES.NORMAL);
+  const [currentInstruction, setCurrentInstruction] = useState("");
   const logsEndRef = useRef(null);
 
   const [backendConnected, setBackendConnected] = useState(false);
@@ -21,7 +30,6 @@ function VisionDashboard({ onNavigate }) {
     ws.onopen = () => {
       setBackendConnected(true);
       setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: "System Initialized. AI Backend Online.", type: "info" }]);
-      setTimeout(() => setVideoKey(Date.now()), 1000); 
     };
 
     ws.onmessage = (event) => {
@@ -32,6 +40,7 @@ function VisionDashboard({ onNavigate }) {
             setDeviceConnected(data.device_connected);
         }
 
+        // Catch log instruction
         if (data.log) {
           const isHazard = data.log.includes("HAZARD");
           const isWarning = data.log.includes("WARNING");
@@ -41,6 +50,19 @@ function VisionDashboard({ onNavigate }) {
             text: data.log, 
             type: isHazard ? "alert" : isWarning ? "error" : "normal" 
           }]);
+        }
+
+        // Catch the new instruction field
+        if (data.instruction) {
+          setCurrentInstruction(data.instruction);
+          
+          // Clear the instruction after 3 seconds if no new hazard appears
+          setTimeout(() => setCurrentInstruction(""), 3000);
+        }
+
+        // Catch the current system mode
+        if (!data.mode) {
+            setActiveMode(SYSTEM_MODES.NORMAL);
         }
       } catch (e) {}
     };
@@ -152,13 +174,15 @@ function VisionDashboard({ onNavigate }) {
         )}
 
         {/* Video Feed */}
-        <img 
-          key={videoKey}
-          src={`http://localhost:8000/video_feed?t=${videoKey}`} 
-          alt="Stream inactive" 
-          style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
-        />
-
+        {deviceConnected && (
+          <img 
+            key={videoKey}
+            src={`http://localhost:8000/video_feed?t=${videoKey}`} 
+            alt="Stream inactive" 
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+          />
+        )}
+        
         {/* TOP LEFT OVERLAY: HUD Status Bar */}
         <div style={{ 
             position: 'absolute', 
@@ -216,24 +240,54 @@ function VisionDashboard({ onNavigate }) {
 
         </div>
 
+        {/* High-Priority Instructions */}
+        {currentInstruction && currentInstruction !== "Path is clear." && (
+          <div style={{ 
+              position: 'absolute', 
+              bottom: '84px', 
+              backgroundColor: 'rgba(239, 68, 68, 0.25)', 
+              border: '2px solid #ef4444',
+              padding: '12px 48px',
+              borderRadius: '8px',
+              backdropFilter: 'blur(8px)',
+              zIndex: 40,
+              textAlign: 'center',
+              animation: 'pulseHeartbeat 1s infinite'
+          }}>
+              <h1 style={{ margin: 0, color: '#fff', fontSize: '12px', fontWeight: '700', letterSpacing: '1.5px', textTransform: 'uppercase' }}>
+                  {currentInstruction}
+              </h1>
+          </div>
+        )}
+
         {/* BOTTOM CENTER OVERLAY: Mode Indicator */}
-        <div style={{ 
-            position: 'absolute', 
-            bottom: '24px', 
-            left: '50%', 
-            transform: 'translateX(-50%)', 
-            backgroundColor: 'rgba(0, 0, 0, 0.4)', 
-            backdropFilter: 'blur(12px)', 
-            padding: '8px 20px', 
-            borderRadius: '24px', 
-            display: 'flex', 
-            alignItems: 'center', 
-            gap: '8px', 
-            zIndex: 20 
-        }}>
-            <div style={{ width: '6px', height: '6px', backgroundColor: '#22c55e', borderRadius: '50%', boxShadow: '0 0 8px #22c55e' }}></div>
-            <span style={{ fontWeight: '500', fontSize: '12px', letterSpacing: '0.5px', color: '#f8fafc' }}>Navigation Mode</span>
-        </div>
+        {activeMode.id !== 'NORMAL' && (
+          <div style={{ 
+              position: 'absolute', 
+              bottom: '24px', 
+              left: '50%', 
+              transform: 'translateX(-50%)', 
+              backgroundColor: 'rgba(0, 0, 0, 0.4)', 
+              backdropFilter: 'blur(12px)', 
+              padding: '8px 20px', 
+              borderRadius: '24px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '10px', 
+              zIndex: 20 
+          }}>
+              <div style={{ 
+                width: '8px', 
+                height: '8px', 
+                backgroundColor: activeMode.color, 
+                borderRadius: '50%', 
+                boxShadow: `0 0 10px ${activeMode.color}` 
+              }}></div>
+              <span style={{ fontWeight: '600', fontSize: '12px', letterSpacing: '0.5px', color: '#f8fafc' }}>
+                {activeMode.label}
+              </span>
+          </div>
+        )}
       </div>
 
       {/* RIGHT PANEL: Sidebar Terminal */}

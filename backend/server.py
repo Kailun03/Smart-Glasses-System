@@ -96,35 +96,67 @@ async def edge_endpoint(websocket: WebSocket):
             if "bytes" in data:
                 raw_bytes = data["bytes"]
 
-                # Decode & Flip
+                # 1. Decode & Flip
                 np_arr = np.frombuffer(raw_bytes, np.uint8)
                 img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                 img = cv2.flip(img, 1)
-                latest_frame = img 
 
-                # Re-encode
-                _, buffer = cv2.imencode('.jpg', img)
+                # 2. Hazard Detection (Pass 'img' directly, receive 'processed_img' back)
+                processed_img, action_command, log_message, audio_instruction = analyze_frame(img)
+
+                # 3. Update the global video feed with the drawn bounding boxes!
+                latest_frame = processed_img 
+
+                # 4. Re-encode to bytes for your OCR module
+                _, buffer = cv2.imencode('.jpg', processed_img)
                 flipped_bytes = buffer.tobytes()
 
                 # Hazard Detection
-                action_command, log_message = analyze_frame(flipped_bytes)
-                
-                if "HAZARD" in log_message:
-                    await websocket.send_text(action_command)
+                # 1. FRAME THROTTLING CHECK
+                # If the engine says "SKIP", we ignore this frame to save battery and keep latency low.
+                if action_command == "SKIP":
+                    pass # Use 'continue' here if this is inside a while/for loop!
+
+                # 2. HAZARD DETECTED STATE
+                elif "HAZARD" in log_message:
+                    await websocket.send_text(action_command) # Send vibration command to ESP32 (e.g., MOTOR_LEFT)
                     print(log_message)
+                    
+                    # Create the enhanced payload for React
+                    payload = {
+                        "type": "log", 
+                        "log": log_message, 
+                        "instruction": audio_instruction # NEW: Send the specific movement instruction
+                    }
+                    
                     for dash in dashboard_connections:
-                        try: await dash.send_text(json.dumps({"type": "log", "log": log_message}))
-                        except: pass
+                        try: 
+                            await dash.send_text(json.dumps(payload))
+                        except: 
+                            pass
+                            
                     is_currently_safe = False 
 
+                # 3. SAFE STATE (Only triggers once when transitioning from Hazard -> Safe)
                 else:
                     if not is_currently_safe:
-                        await websocket.send_text(action_command) 
+                        await websocket.send_text(action_command) # Send "SAFE" to ESP32 to stop motors
                         msg = "SAFE: Coast is clear."
                         print(msg)
+                        
+                        # Create the safe payload for React
+                        payload = {
+                            "type": "log", 
+                            "log": msg, 
+                            "instruction": "Path is clear." # Clears the red HUD warning on the dashboard
+                        }
+                        
                         for dash in dashboard_connections:
-                            try: await dash.send_text(json.dumps({"type": "log", "log": msg}))
-                            except: pass
+                            try: 
+                                await dash.send_text(json.dumps(payload))
+                            except: 
+                                pass
+                                
                         is_currently_safe = True
                         
                 # OCR
