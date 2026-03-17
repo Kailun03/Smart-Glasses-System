@@ -42,6 +42,10 @@ function VisionDashboard({ onNavigate }) {
 
         // Catch log instruction
         if (data.log) {
+          if (data.type !== "status") {
+            setDeviceConnected(true); 
+          }
+
           const isHazard = data.log.includes("HAZARD");
           const isWarning = data.log.includes("WARNING");
           
