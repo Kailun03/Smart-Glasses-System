@@ -8,18 +8,44 @@ print("[OCR] OCR Engine Loaded!")
 
 SAFETY_KEYWORDS = ["danger", "warning", "stop", "caution", "restricted", "hazard"]
 
-def analyze_text(img: np.ndarray):
-    if img is None: return "", []
-
+def _preprocess(img: np.ndarray) -> np.ndarray:
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-    sharpened = cv2.filter2D(gray, -1, kernel)
-    
-    results = reader.readtext(sharpened)
-    full_text = " ".join([res[1] for res in results])
-    
-    # Proactive safety keyword scan
+    kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+    return cv2.filter2D(gray, -1, kernel)
+
+
+def analyze_text(img: np.ndarray):
+    """
+    Full OCR scan (reactive / on-demand friendly).
+    Returns (full_text, detected_safety_keywords).
+    """
+    if img is None:
+        return "", []
+
+    processed = _preprocess(img)
+    results = reader.readtext(processed)
+    full_text = " ".join([res[1] for res in results]).strip()
+
     lower_text = full_text.lower()
     detected_keywords = [kw for kw in SAFETY_KEYWORDS if kw in lower_text]
-    
-    return full_text.strip(), detected_keywords
+    return full_text, detected_keywords
+
+
+def scan_safety_keywords(img: np.ndarray):
+    """
+    Lightweight proactive scan focused on safety keywords.
+    Returns (detected_keywords, raw_text_snippet).
+
+    Note: easyocr doesn't support true streaming-lite inference, but using an allowlist
+    reduces recognition complexity in practice.
+    """
+    if img is None:
+        return [], ""
+
+    processed = _preprocess(img)
+    allowlist = "".join(sorted(set("".join(SAFETY_KEYWORDS).upper() + " ")))
+    results = reader.readtext(processed, allowlist=allowlist, detail=0)
+    text = " ".join(results).strip()
+    lower_text = text.lower()
+    detected_keywords = [kw for kw in SAFETY_KEYWORDS if kw in lower_text]
+    return detected_keywords, text

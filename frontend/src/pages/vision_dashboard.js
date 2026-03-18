@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Terminal, Trash2, Server, Cpu, Glasses, LogOut, Battery, Navigation } from 'lucide-react';
+import { Activity, Terminal, Trash2, Server, Cpu, Glasses, LogOut, Battery, Navigation, Command } from 'lucide-react';
 
 const SYSTEM_MODES = {
   NORMAL: { id: 'NORMAL', label: 'Normal Mode', color: 'transparent' },
@@ -17,6 +17,9 @@ function VisionDashboard({ onNavigate }) {
 
   const [backendConnected, setBackendConnected] = useState(false);
   const [deviceConnected, setDeviceConnected] = useState(false);
+  const wsRef = useRef(null);
+  const [navDestination, setNavDestination] = useState("");
+  const commandsEnabled = backendConnected && deviceConnected;
 
   // Auto-scroll logs
   useEffect(() => {
@@ -26,6 +29,7 @@ function VisionDashboard({ onNavigate }) {
   // WebSocket Connection
   useEffect(() => {
     const ws = new WebSocket('ws://localhost:8000/ws/dashboard');
+    wsRef.current = ws;
 
     ws.onopen = () => {
       setBackendConnected(true);
@@ -38,6 +42,9 @@ function VisionDashboard({ onNavigate }) {
         
         if (data.type === "status") {
             setDeviceConnected(data.device_connected);
+            if (data.mode && SYSTEM_MODES[data.mode]) {
+              setActiveMode(SYSTEM_MODES[data.mode]);
+            }
         }
 
         // Catch log instruction
@@ -64,9 +71,9 @@ function VisionDashboard({ onNavigate }) {
           setTimeout(() => setCurrentInstruction(""), 3000);
         }
 
-        // Catch the current system mode
-        if (!data.mode) {
-            setActiveMode(SYSTEM_MODES.NORMAL);
+        // Catch mode updates from backend
+        if (data.mode && SYSTEM_MODES[data.mode]) {
+          setActiveMode(SYSTEM_MODES[data.mode]);
         }
       } catch (e) {}
     };
@@ -79,6 +86,36 @@ function VisionDashboard({ onNavigate }) {
 
     return () => ws.close();
   }, []);
+
+  const sendCommand = (payload) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: "Backend not connected. Command not sent.", type: "error" }]);
+      return;
+    }
+    ws.send(JSON.stringify({ type: "command", ...payload }));
+  };
+
+  const parseLatLon = (raw) => {
+    const text = String(raw || "").trim();
+    // accepts: "5.41,100.33" or "5.41 100.33"
+    const m = text.match(/^(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)$/);
+    if (!m) return null;
+    const lat = Number(m[1]);
+    const lon = Number(m[2]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+    return { lat, lon };
+  };
+
+  const startNavigation = () => {
+    const coords = parseLatLon(navDestination);
+    if (coords) {
+      sendCommand({ command: "NAV_START", dest_lat: coords.lat, dest_lon: coords.lon, destination: navDestination });
+      return;
+    }
+    sendCommand({ command: "NAV_START", destination: navDestination });
+  };
 
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw', backgroundColor: '#0f172a', fontFamily: 'system-ui, sans-serif', color: '#e2e8f0', overflow: 'hidden' }}>
@@ -155,6 +192,95 @@ function VisionDashboard({ onNavigate }) {
               visibility: visible;
               opacity: 1;
               transform: translateY(0); /* Slide down smoothly */
+          }
+
+          /* Command Palette (hover dropdown) */
+          .cmd-container {
+              position: relative;
+              display: inline-flex;
+              align-items: center;
+          }
+
+          .cmd-btn {
+              background: none;
+              border: none;
+              color: #64748b;
+              cursor: pointer;
+              display: flex;
+              align-items: center;
+              transition: color 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
+          }
+
+          .cmd-btn:hover {
+              color: #38bdf8;
+              transform: translateY(-1px);
+          }
+
+          .cmd-btn.disabled {
+              cursor: not-allowed;
+              opacity: 0.55;
+          }
+
+          .cmd-tooltip {
+              visibility: hidden;
+              opacity: 0;
+              background-color: #0b1220;
+              color: #f8fafc;
+              border: 1px solid rgba(148, 163, 184, 0.22);
+              text-align: left;
+              border-radius: 10px;
+              padding: 8px 12px;
+              position: absolute;
+              z-index: 120;
+              top: 130%;
+              right: 0;
+              font-size: 11px;
+              white-space: nowrap;
+              font-weight: 700;
+              letter-spacing: 0.2px;
+              transform: translateY(-10px);
+              transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+              box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+          }
+
+          .cmd-tooltip::after {
+              content: "";
+              position: absolute;
+              bottom: 100%;
+              right: 10px;
+              border-width: 6px;
+              border-style: solid;
+              border-color: transparent transparent #0b1220 transparent;
+          }
+
+          .cmd-panel {
+              visibility: hidden;
+              opacity: 0;
+              position: absolute;
+              top: 130%;
+              right: 0;
+              width: 284px;
+              background: radial-gradient(1200px 600px at 20% -20%, rgba(56, 189, 248, 0.16), rgba(0,0,0,0)), #0b1220;
+              border: 1px solid rgba(148, 163, 184, 0.22);
+              border-radius: 14px;
+              padding: 12px;
+              transform: translateY(-12px) scale(0.98);
+              transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.22s;
+              box-shadow: 0 18px 60px rgba(0,0,0,0.65);
+              z-index: 140;
+              backdrop-filter: blur(14px);
+          }
+
+          .cmd-container.enabled:hover .cmd-panel {
+              visibility: visible;
+              opacity: 1;
+              transform: translateY(0) scale(1);
+          }
+
+          .cmd-container.disabled:hover .cmd-tooltip {
+              visibility: visible;
+              opacity: 1;
+              transform: translateY(0);
           }
       `}</style>
 
@@ -304,17 +430,96 @@ function VisionDashboard({ onNavigate }) {
             Terminal
           </div>
           
-          {/* NEW: Animated Tooltip Wrapper & Updated Icon */}
-          <div className="clear-btn-container">
-            <button 
-              onClick={() => setLogs([])} 
-              style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'color 0.2s ease' }} 
-              onMouseOver={(e) => e.currentTarget.style.color = '#ef4444'} 
-              onMouseOut={(e) => e.currentTarget.style.color = '#64748b'}
-            >
-              <Trash2 size={16} />
-            </button>
-            <span className="custom-tooltip">Clear Logs</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {/* Active Commands Palette */}
+            <div className={`cmd-container ${commandsEnabled ? "enabled" : "disabled"}`}>
+              <button
+                className={`cmd-btn ${commandsEnabled ? "" : "disabled"}`}
+                onClick={(e) => e.preventDefault()}
+                aria-label="Active Commands"
+              >
+                <Command size={18} />
+              </button>
+
+              {!commandsEnabled && (
+                <span className="cmd-tooltip">
+                  Commands locked: {backendConnected ? "Edge offline" : "Host offline"}.
+                </span>
+              )}
+
+              {commandsEnabled && (
+                <div className="cmd-panel">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ width: 8, height: 8, borderRadius: 999, backgroundColor: '#22c55e', boxShadow: '0 0 12px rgba(34,197,94,0.55)' }} />
+                      <span style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '0.6px', textTransform: 'uppercase', color: '#e2e8f0' }}>
+                        Active Commands
+                      </span>
+                    </div>
+                    <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 700 }}>Hover to keep open</span>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '16px' }}>
+                    <button
+                      onClick={() => sendCommand({ command: "FULL_OCR" })}
+                      style={{ flex: 1, backgroundColor: 'rgba(56, 189, 248, 0.10)', border: '1px solid rgba(56, 189, 248, 0.25)', color: '#f8fafc', padding: '10px', borderRadius: '10px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, transition: 'transform 0.15s ease' }}
+                      onMouseOver={(e) => (e.currentTarget.style.transform = 'translateY(-1px)')}
+                      onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
+                    >
+                      Full OCR
+                    </button>
+                    <button
+                      onClick={() => sendCommand({ command: "TOOLS_SCAN" })}
+                      style={{ flex: 1, backgroundColor: 'rgba(45, 212, 191, 0.10)', border: '1px solid rgba(45, 212, 191, 0.25)', color: '#f8fafc', padding: '10px', borderRadius: '10px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, transition: 'transform 0.15s ease' }}
+                      onMouseOver={(e) => (e.currentTarget.style.transform = 'translateY(-1px)')}
+                      onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
+                    >
+                      Scan Tools
+                    </button>
+                  </div>
+
+                  <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <input
+                      value={navDestination}
+                      onChange={(e) => setNavDestination(e.target.value)}
+                      placeholder="Destination: 'lat,lon' or place (needs geocoding)"
+                      style={{ width: '93%', backgroundColor: 'rgba(2, 6, 23, 0.75)', border: '1px solid rgba(148, 163, 184, 0.20)', color: '#f8fafc', padding: '10px 10px', borderRadius: '10px', fontSize: '12px' }}
+                    />
+                    <div style={{ display: 'flex', gap: '16px' }}>
+                      <button
+                        onClick={startNavigation}
+                        style={{ flex: 1, backgroundColor: 'rgba(34, 197, 94, 0.12)', border: '1px solid rgba(34, 197, 94, 0.28)', color: '#f8fafc', padding: '10px 12px', borderRadius: '10px', cursor: 'pointer', fontSize: '12px', fontWeight: 900, letterSpacing: '0.3px', transition: 'transform 0.15s ease' }}
+                        onMouseOver={(e) => (e.currentTarget.style.transform = 'translateY(-1px)')}
+                        onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
+                      >
+                        Start
+                      </button>
+                      <button
+                        onClick={() => sendCommand({ command: "NAV_STOP" })}
+                        style={{ flex: 1, backgroundColor: 'rgba(239, 68, 68, 0.10)', border: '1px solid rgba(239, 68, 68, 0.25)', color: '#f8fafc', padding: '10px 12px', borderRadius: '10px', cursor: 'pointer', fontSize: '12px', fontWeight: 900, letterSpacing: '0.3px', transition: 'transform 0.15s ease' }}
+                        onMouseOver={(e) => (e.currentTarget.style.transform = 'translateY(-1px)')}
+                        onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
+                      >
+                        Stop
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Clear Logs */}
+            <div className="clear-btn-container">
+              <button 
+                onClick={() => setLogs([])} 
+                style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'color 0.2s ease' }} 
+                onMouseOver={(e) => e.currentTarget.style.color = '#ef4444'} 
+                onMouseOut={(e) => e.currentTarget.style.color = '#64748b'}
+              >
+                <Trash2 size={16} />
+              </button>
+              <span className="custom-tooltip">Clear Logs</span>
+            </div>
           </div>
 
         </div>
