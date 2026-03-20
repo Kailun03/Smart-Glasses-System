@@ -14,11 +14,15 @@ function VisionDashboard({ onNavigate }) {
   const [activeMode, setActiveMode] = useState(SYSTEM_MODES.NORMAL);
   const [currentInstruction, setCurrentInstruction] = useState("");
   const logsEndRef = useRef(null);
+  const transientModeResetRef = useRef(null);
+  const lastOneShotRef = useRef({ kind: null, at: 0 });
 
   const [backendConnected, setBackendConnected] = useState(false);
   const [deviceConnected, setDeviceConnected] = useState(false);
   const wsRef = useRef(null);
   const [navDestination, setNavDestination] = useState("");
+  const [location, setLocation] = useState(null); // { lat, lon } from backend status
+  const [navState, setNavState] = useState({ active: false, provider: null, dest: null, pending: false });
   const commandsEnabled = backendConnected && deviceConnected;
 
   // Auto-scroll logs
@@ -42,6 +46,9 @@ function VisionDashboard({ onNavigate }) {
         
         if (data.type === "status") {
             setDeviceConnected(data.device_connected);
+            if (data.location && typeof data.location.lat === "number" && typeof data.location.lon === "number") {
+              setLocation({ lat: data.location.lat, lon: data.location.lon });
+            }
             if (data.mode && SYSTEM_MODES[data.mode]) {
               setActiveMode(SYSTEM_MODES[data.mode]);
             }
@@ -55,6 +62,22 @@ function VisionDashboard({ onNavigate }) {
 
           const isHazard = data.log.includes("HAZARD");
           const isWarning = data.log.includes("WARNING");
+
+          // Navigation UX state: treat nav as a session (active/paused/stopped),
+          // not just a "mode" string, to prevent stuck or misleading UI.
+          if (data.log.startsWith("NAVIGATION STARTED")) {
+            setNavState({
+              active: true,
+              provider: data.nav?.provider || null,
+              dest: data.nav?.dest || null,
+              pending: false,
+            });
+          } else if (data.log.startsWith("NAVIGATION STOPPED")) {
+            setNavState({ active: false, provider: null, dest: null, pending: false });
+          } else if (data.log.startsWith("NAVIGATION: Destination not set")) {
+            setNavState({ active: false, provider: null, dest: null, pending: false });
+            setActiveMode(SYSTEM_MODES.NORMAL);
+          }
           
           setLogs(prev => [...prev, { 
             time: new Date().toLocaleTimeString(), 
@@ -74,6 +97,16 @@ function VisionDashboard({ onNavigate }) {
         // Catch mode updates from backend
         if (data.mode && SYSTEM_MODES[data.mode]) {
           setActiveMode(SYSTEM_MODES[data.mode]);
+
+          // UI smoothing: OCR/TOOL are one-shot actions in this prototype.
+          // Backend may keep mode as OCR/TOOL after completing a single run, which is confusing.
+          // Treat OCR/TOOL as transient badges and auto-return to NORMAL shortly after.
+          if (data.mode === "OCR" || data.mode === "TOOL") {
+            if (transientModeResetRef.current) clearTimeout(transientModeResetRef.current);
+            transientModeResetRef.current = setTimeout(() => {
+              setActiveMode(SYSTEM_MODES.NORMAL);
+            }, 2600);
+          }
         }
       } catch (e) {}
     };
@@ -84,7 +117,10 @@ function VisionDashboard({ onNavigate }) {
       setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: "CRITICAL: Backend Disconnected.", type: "error" }]);
     };
 
-    return () => ws.close();
+    return () => {
+      if (transientModeResetRef.current) clearTimeout(transientModeResetRef.current);
+      ws.close();
+    };
   }, []);
 
   const sendCommand = (payload) => {
@@ -93,6 +129,28 @@ function VisionDashboard({ onNavigate }) {
       setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: "Backend not connected. Command not sent.", type: "error" }]);
       return;
     }
+
+    // Give immediate UI feedback for one-shot actions.
+    const cmd = String(payload?.command || "").toUpperCase();
+    if (cmd === "FULL_OCR") {
+      lastOneShotRef.current = { kind: "OCR", at: Date.now() };
+      setActiveMode(SYSTEM_MODES.OCR);
+      setCurrentInstruction("Running OCR...");
+      if (transientModeResetRef.current) clearTimeout(transientModeResetRef.current);
+    } else if (cmd === "TOOLS_SCAN") {
+      lastOneShotRef.current = { kind: "TOOL", at: Date.now() };
+      setActiveMode(SYSTEM_MODES.TOOL);
+      setCurrentInstruction("Scanning tools...");
+      if (transientModeResetRef.current) clearTimeout(transientModeResetRef.current);
+    } else if (cmd === "NAV_START") {
+      setActiveMode(SYSTEM_MODES.NAVIGATION);
+      setNavState(prev => ({ ...prev, pending: true }));
+      setCurrentInstruction("Starting navigation...");
+      if (transientModeResetRef.current) clearTimeout(transientModeResetRef.current);
+    } else if (cmd === "NAV_STOP") {
+      setNavState({ active: false, provider: null, dest: null, pending: false });
+    }
+
     ws.send(JSON.stringify({ type: "command", ...payload }));
   };
 
@@ -115,6 +173,15 @@ function VisionDashboard({ onNavigate }) {
       return;
     }
     sendCommand({ command: "NAV_START", destination: navDestination });
+  };
+
+  const navPaused = navState.active && !deviceConnected;
+  const displayMode = (navState.active || navState.pending) ? SYSTEM_MODES.NAVIGATION : activeMode;
+
+  const formatLatLon = (lat, lon) => {
+    const ns = lat >= 0 ? "N" : "S";
+    const ew = lon >= 0 ? "E" : "W";
+    return `${Math.abs(lat).toFixed(2)}° ${ns}, ${Math.abs(lon).toFixed(2)}° ${ew}`;
   };
 
   return (
@@ -363,7 +430,9 @@ function VisionDashboard({ onNavigate }) {
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Navigation size={14} color="#f8fafc" />
-                  <span style={{ fontSize: '11px', fontWeight: '500', color: '#f8fafc' }}>5.41° N, 100.33° W</span>
+                  <span style={{ fontSize: '11px', fontWeight: '500', color: '#f8fafc' }}>
+                    {location ? formatLatLon(location.lat, location.lon) : "Loc: —"}
+                  </span>
                 </div>
               </>
             )}
@@ -391,7 +460,7 @@ function VisionDashboard({ onNavigate }) {
         )}
 
         {/* BOTTOM CENTER OVERLAY: Mode Indicator */}
-        {activeMode.id !== 'NORMAL' && (
+        {displayMode.id !== 'NORMAL' && (
           <div style={{ 
               position: 'absolute', 
               bottom: '24px', 
@@ -409,12 +478,14 @@ function VisionDashboard({ onNavigate }) {
               <div style={{ 
                 width: '8px', 
                 height: '8px', 
-                backgroundColor: activeMode.color, 
+                backgroundColor: displayMode.color, 
                 borderRadius: '50%', 
-                boxShadow: `0 0 10px ${activeMode.color}` 
+                boxShadow: `0 0 10px ${displayMode.color}` 
               }}></div>
               <span style={{ fontWeight: '600', fontSize: '12px', letterSpacing: '0.5px', color: '#f8fafc' }}>
-                {activeMode.label}
+                {displayMode.id === "NAVIGATION"
+                  ? (navPaused ? "Navigation (paused — edge offline)" : navState.pending ? "Navigation (starting…)" : "Navigation (active)")
+                  : displayMode.label}
               </span>
           </div>
         )}
@@ -488,21 +559,28 @@ function VisionDashboard({ onNavigate }) {
                     <div style={{ display: 'flex', gap: '16px' }}>
                       <button
                         onClick={startNavigation}
-                        style={{ flex: 1, backgroundColor: 'rgba(34, 197, 94, 0.12)', border: '1px solid rgba(34, 197, 94, 0.28)', color: '#f8fafc', padding: '10px 12px', borderRadius: '10px', cursor: 'pointer', fontSize: '12px', fontWeight: 900, letterSpacing: '0.3px', transition: 'transform 0.15s ease' }}
-                        onMouseOver={(e) => (e.currentTarget.style.transform = 'translateY(-1px)')}
+                        disabled={!navDestination.trim() || navState.pending}
+                        style={{ flex: 1, backgroundColor: 'rgba(34, 197, 94, 0.12)', border: '1px solid rgba(34, 197, 94, 0.28)', color: '#f8fafc', padding: '10px 12px', borderRadius: '10px', cursor: (!navDestination.trim() || navState.pending) ? 'not-allowed' : 'pointer', opacity: (!navDestination.trim() || navState.pending) ? 0.55 : 1, fontSize: '12px', fontWeight: 900, letterSpacing: '0.3px', transition: 'transform 0.15s ease' }}
+                        onMouseOver={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.transform = 'translateY(-1px)'; }}
                         onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
                       >
-                        Start
+                        {navState.pending ? "Starting…" : "Start"}
                       </button>
                       <button
                         onClick={() => sendCommand({ command: "NAV_STOP" })}
-                        style={{ flex: 1, backgroundColor: 'rgba(239, 68, 68, 0.10)', border: '1px solid rgba(239, 68, 68, 0.25)', color: '#f8fafc', padding: '10px 12px', borderRadius: '10px', cursor: 'pointer', fontSize: '12px', fontWeight: 900, letterSpacing: '0.3px', transition: 'transform 0.15s ease' }}
-                        onMouseOver={(e) => (e.currentTarget.style.transform = 'translateY(-1px)')}
+                        disabled={!navState.active && !navState.pending}
+                        style={{ flex: 1, backgroundColor: 'rgba(239, 68, 68, 0.10)', border: '1px solid rgba(239, 68, 68, 0.25)', color: '#f8fafc', padding: '10px 12px', borderRadius: '10px', cursor: (!navState.active && !navState.pending) ? 'not-allowed' : 'pointer', opacity: (!navState.active && !navState.pending) ? 0.55 : 1, fontSize: '12px', fontWeight: 900, letterSpacing: '0.3px', transition: 'transform 0.15s ease' }}
+                        onMouseOver={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.transform = 'translateY(-1px)'; }}
                         onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
                       >
                         Stop
                       </button>
                     </div>
+                    {(navState.active || navState.pending) && (
+                      <div style={{ marginTop: '10px', fontSize: '10px', color: '#94a3b8', fontWeight: 700 }}>
+                        {navPaused ? "Navigation paused: EDGE offline (will resume when video reconnects)." : navState.active ? `Navigation active${navState.provider ? ` (${navState.provider})` : ""}.` : "Starting navigation…"}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

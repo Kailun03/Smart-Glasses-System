@@ -29,7 +29,7 @@ function Sidebar({ currentPage, onNavigateHome, onNavigateTools }) {
           bottom: 0,
           left: 0,
           width: isSidebarExpanded ? '260px' : '40px',
-          backgroundColor: '#020617', 
+          backgroundColor: 'rgba(5, 29, 37, 0.6)', 
           borderRight: '1px solid #1e293b', 
           padding: '24px 8px', 
           display: 'flex', 
@@ -44,7 +44,7 @@ function Sidebar({ currentPage, onNavigateHome, onNavigateTools }) {
         
         {/* App Branding */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', paddingBottom: '24px', borderBottom: '1px solid #1e293b' }}>
-          <div style={{ backgroundColor: 'rgba(56, 189, 248, 0.1)', padding: '8px', borderRadius: '12px', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+          <div style={{ backgroundColor: 'rgba(15, 89, 121, 0.5)', padding: '8px', borderRadius: '12px', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
             <Shield size={24} color="#38bdf8" />
           </div>
           <div style={{ opacity: isSidebarExpanded ? 1 : 0, transition: 'opacity 0.2s ease-in-out' }}>
