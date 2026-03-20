@@ -9,15 +9,13 @@ const char* ssid = "Teoh";
 const char* password = "Kailun2003";
 
 // ==========================================
-// 2. Ngrok WebSocket Configuration
+// 2. WebSocket Configuration
 // ==========================================
-const char* ws_host = "tabs-karaoke-lists-jersey.trycloudflare.com";
-const int ws_port = 443; // Port 443 is required for secure connections (wss://)
+const char* ws_host = "toolbar-determining-arbor-baltimore.trycloudflare.com";
+const int ws_port = 443; 
 const char* ws_url = "/ws";
 
 WebSocketsClient webSocket;
-unsigned long last_frame_time = 0;
-bool send_next_frame = false;
 
 // ==========================================
 // 3. PIN DEFINITIONS (ESP32-S3 Standard)
@@ -39,7 +37,6 @@ bool send_next_frame = false;
 #define HREF_GPIO_NUM     7
 #define PCLK_GPIO_NUM     13
 
-// Function to handle incoming messages from your Python server
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
     case WStype_DISCONNECTED:
@@ -48,27 +45,13 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     case WStype_CONNECTED:
       Serial.println("SUCCESS: WebSocket Connected to Python Server!");
       break;
-    case WStype_TEXT:
-      Serial.printf("Message from Server: %s\n", payload);
-      // If Python sends the word "NEXT", flip our flag to true
-      if (strncmp((char*)payload, "NEXT", 4) == 0) {
-         send_next_frame = true;
-      }
-      break;
   }
 }
 
 void setup() {
   Serial.begin(115200);
-  Serial.setDebugOutput(true);
+  Serial.setDebugOutput(false);
   Serial.println("\n--- OUTDOOR EDGE DEVICE START ---");
-
-  // memory check
-  if(psramFound()){
-      Serial.println("SUCCESS: PSRAM is enabled and working!");
-    } else {
-      Serial.println("CRITICAL ERROR: PSRAM is NOT found! Check Tools > PSRAM settings.");
-    }
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -94,12 +77,11 @@ void setup() {
   config.xclk_freq_hz = 20000000;       
   config.frame_size = FRAMESIZE_VGA;   
   config.pixel_format = PIXFORMAT_JPEG; 
-  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  config.grab_mode = CAMERA_GRAB_LATEST;
   config.fb_location = CAMERA_FB_IN_PSRAM;
   config.jpeg_quality = 10;
   config.fb_count = 2;
 
-  // Initialize Camera
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera init failed! 0x%x\n", err);
@@ -112,7 +94,6 @@ void setup() {
       s->set_hmirror(s, 1);
   }
 
-  // Connect WiFi
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi");
@@ -122,27 +103,33 @@ void setup() {
   }
   Serial.println("\nWiFi connected");
 
-  // Initialize Secure WebSocket Client
   webSocket.beginSSL(ws_host, ws_port, ws_url);
   webSocket.onEvent(webSocketEvent);
-  
-  // If the connection drops, try to reconnect every 5 seconds
   webSocket.setReconnectInterval(5000); 
-
-  // Ping server every 15s, wait 3s for pong, disconnect if it fails 2 times
   webSocket.enableHeartbeat(15000, 3000, 2);
 }
+
+// ----------------------------------------------------
+// THE FIREHOSE: Send autonomously at 15 FPS
+// ----------------------------------------------------
+unsigned long last_transmission = 0;
+const int TARGET_FPS = 15; 
+const int FRAME_DELAY = 1000 / TARGET_FPS; 
 
 void loop() {
   webSocket.loop();
 
-  camera_fb_t * fb = esp_camera_fb_get();
+  unsigned long current_time = millis();
   
-  if (fb) {
-    webSocket.sendBIN(fb->buf, fb->len);
-    esp_camera_fb_return(fb);
-    last_frame_time = millis(); // Reset the timer
+  if (current_time - last_transmission >= FRAME_DELAY) {
+      camera_fb_t * fb = esp_camera_fb_get();
+      if (fb) {
+        webSocket.sendBIN(fb->buf, fb->len);
+        esp_camera_fb_return(fb);
+        last_transmission = millis(); 
+      }
   }
-  
-  delay(10); // Essential 10ms delay to keep the WiFi chip from crashing
+
+  // CRITICAL FOR STABILITY: Gives the WiFi modem time to clear its queue
+  delay(10); 
 }

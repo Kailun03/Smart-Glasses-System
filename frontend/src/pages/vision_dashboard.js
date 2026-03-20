@@ -24,6 +24,9 @@ function VisionDashboard({ onNavigate }) {
   const [location, setLocation] = useState(null); // { lat, lon } from backend status
   const [navState, setNavState] = useState({ active: false, provider: null, dest: null, pending: false });
   const commandsEnabled = backendConnected && deviceConnected;
+  const reconnectTimeoutRef = useRef(null);
+  const reconnectAttemptsRef = useRef(0);
+  const shouldReconnectRef = useRef(true);
 
   // Auto-scroll logs
   useEffect(() => {
@@ -32,94 +35,133 @@ function VisionDashboard({ onNavigate }) {
 
   // WebSocket Connection
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/ws/dashboard');
-    wsRef.current = ws;
+    shouldReconnectRef.current = true;
 
-    ws.onopen = () => {
-      setBackendConnected(true);
-      setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: "System Initialized. AI Backend Online.", type: "info" }]);
-    };
+    const connect = () => {
+      const ws = new WebSocket('ws://localhost:8000/ws/dashboard');
+      wsRef.current = ws;
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        if (data.type === "status") {
-            setDeviceConnected(data.device_connected);
-            if (data.location && typeof data.location.lat === "number" && typeof data.location.lon === "number") {
-              setLocation({ lat: data.location.lat, lon: data.location.lon });
-            }
-            if (data.mode && SYSTEM_MODES[data.mode]) {
-              setActiveMode(SYSTEM_MODES[data.mode]);
-            }
-        }
+      ws.onopen = () => {
+        const wasReconnecting = reconnectAttemptsRef.current > 0;
+        reconnectAttemptsRef.current = 0;
+        setBackendConnected(true);
+        // Force MJPEG <img> element to reconnect so the visible stream updates immediately.
+        if (wasReconnecting) setVideoKey(Date.now());
+        setLogs(prev => [
+          ...prev,
+          {
+            time: new Date().toLocaleTimeString(),
+            text: wasReconnecting ? "Host reconnected. Resyncing dashboard..." : "System Initialized. AI Backend Online.",
+            type: "info",
+          },
+        ]);
+      };
 
-        // Catch log instruction
-        if (data.log) {
-          if (data.type !== "status") {
-            setDeviceConnected(true); 
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          if (data.type === "status") {
+              setDeviceConnected(data.device_connected);
+              if (data.location && typeof data.location.lat === "number" && typeof data.location.lon === "number") {
+                setLocation({ lat: data.location.lat, lon: data.location.lon });
+              }
+              if (data.mode && SYSTEM_MODES[data.mode]) {
+                setActiveMode(SYSTEM_MODES[data.mode]);
+              }
           }
 
-          const isHazard = data.log.includes("HAZARD");
-          const isWarning = data.log.includes("WARNING");
+          // Catch log instruction
+          if (data.log) {
+            if (data.type !== "status") {
+              setDeviceConnected(true); 
+            }
 
-          // Navigation UX state: treat nav as a session (active/paused/stopped),
-          // not just a "mode" string, to prevent stuck or misleading UI.
-          if (data.log.startsWith("NAVIGATION STARTED")) {
-            setNavState({
-              active: true,
-              provider: data.nav?.provider || null,
-              dest: data.nav?.dest || null,
-              pending: false,
-            });
-          } else if (data.log.startsWith("NAVIGATION STOPPED")) {
-            setNavState({ active: false, provider: null, dest: null, pending: false });
-          } else if (data.log.startsWith("NAVIGATION: Destination not set")) {
-            setNavState({ active: false, provider: null, dest: null, pending: false });
-            setActiveMode(SYSTEM_MODES.NORMAL);
-          }
-          
-          setLogs(prev => [...prev, { 
-            time: new Date().toLocaleTimeString(), 
-            text: data.log, 
-            type: isHazard ? "alert" : isWarning ? "error" : "normal" 
-          }]);
-        }
+            const isHazard = data.log.includes("HAZARD");
+            const isWarning = data.log.includes("WARNING");
 
-        // Catch the new instruction field
-        if (data.instruction) {
-          setCurrentInstruction(data.instruction);
-          
-          // Clear the instruction after 3 seconds if no new hazard appears
-          setTimeout(() => setCurrentInstruction(""), 3000);
-        }
-
-        // Catch mode updates from backend
-        if (data.mode && SYSTEM_MODES[data.mode]) {
-          setActiveMode(SYSTEM_MODES[data.mode]);
-
-          // UI smoothing: OCR/TOOL are one-shot actions in this prototype.
-          // Backend may keep mode as OCR/TOOL after completing a single run, which is confusing.
-          // Treat OCR/TOOL as transient badges and auto-return to NORMAL shortly after.
-          if (data.mode === "OCR" || data.mode === "TOOL") {
-            if (transientModeResetRef.current) clearTimeout(transientModeResetRef.current);
-            transientModeResetRef.current = setTimeout(() => {
+            // Navigation UX state: treat nav as a session (active/paused/stopped),
+            // not just a "mode" string, to prevent stuck or misleading UI.
+            if (data.log.startsWith("NAVIGATION STARTED")) {
+              setNavState({
+                active: true,
+                provider: data.nav?.provider || null,
+                dest: data.nav?.dest || null,
+                pending: false,
+              });
+            } else if (data.log.startsWith("NAVIGATION STOPPED")) {
+              setNavState({ active: false, provider: null, dest: null, pending: false });
+            } else if (data.log.startsWith("NAVIGATION: Destination not set")) {
+              setNavState({ active: false, provider: null, dest: null, pending: false });
               setActiveMode(SYSTEM_MODES.NORMAL);
-            }, 2600);
+            }
+            
+            setLogs(prev => [...prev, { 
+              time: new Date().toLocaleTimeString(), 
+              text: data.log, 
+              type: isHazard ? "alert" : isWarning ? "error" : "normal" 
+            }]);
           }
-        }
-      } catch (e) {}
+
+          // Catch the new instruction field
+          if (data.instruction) {
+            setCurrentInstruction(data.instruction);
+            
+            // Clear the instruction after 3 seconds if no new hazard appears
+            setTimeout(() => setCurrentInstruction(""), 3000);
+          }
+
+          // Catch mode updates from backend
+          if (data.mode && SYSTEM_MODES[data.mode]) {
+            setActiveMode(SYSTEM_MODES[data.mode]);
+
+            // UI smoothing: OCR/TOOL are one-shot actions in this prototype.
+            // Backend may keep mode as OCR/TOOL after completing a single run, which is confusing.
+            // Treat OCR/TOOL as transient badges and auto-return to NORMAL shortly after.
+            if (data.mode === "OCR" || data.mode === "TOOL") {
+              if (transientModeResetRef.current) clearTimeout(transientModeResetRef.current);
+              transientModeResetRef.current = setTimeout(() => {
+                setActiveMode(SYSTEM_MODES.NORMAL);
+              }, 2600);
+            }
+          }
+        } catch (e) {}
+      };
+
+      ws.onerror = () => {
+        // onclose will also fire in most cases; keep logic centralized there.
+      };
+
+      ws.onclose = () => {
+        setBackendConnected(false);
+        setDeviceConnected(false); 
+        setLogs(prev => [
+          ...prev,
+          { time: new Date().toLocaleTimeString(), text: "CRITICAL: Backend Disconnected.", type: "error" },
+        ]);
+
+        if (!shouldReconnectRef.current) return;
+
+        reconnectAttemptsRef.current += 1;
+        const attempt = reconnectAttemptsRef.current;
+        const delayMs = Math.min(5000, 600 * attempt); // backoff cap at 5s
+
+        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (shouldReconnectRef.current) connect();
+        }, delayMs);
+      };
     };
 
-    ws.onclose = () => {
-      setBackendConnected(false);
-      setDeviceConnected(false); 
-      setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: "CRITICAL: Backend Disconnected.", type: "error" }]);
-    };
+    connect();
 
     return () => {
+      shouldReconnectRef.current = false;
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (transientModeResetRef.current) clearTimeout(transientModeResetRef.current);
-      ws.close();
+      try {
+        wsRef.current?.close();
+      } catch (e) {}
     };
   }, []);
 
