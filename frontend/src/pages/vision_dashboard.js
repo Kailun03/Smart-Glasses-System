@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Terminal, Trash2, Server, Cpu, Glasses, LogOut, Battery, Navigation, Command } from 'lucide-react';
+import { Activity, Terminal, Trash2, Server, Cpu, Glasses, LogOut, Battery, Navigation, Command, Volume2, VolumeX } from 'lucide-react';
 
 const SYSTEM_MODES = {
   NORMAL: { id: 'NORMAL', label: 'Normal Mode', color: 'transparent' },
   NAVIGATION: { id: 'NAVIGATION', label: 'Navigation Mode', color: '#22c55e' },
-  OCR: { id: 'OCR', label: 'OCR Text Mode', color: '#f59e0b' },                 
+  OCR: { id: 'OCR', label: 'OCR Text Mode', color: '#f59e0b' },                
   TOOL: { id: 'TOOL', label: 'Tool Recognition', color: '#38bdf8' }
 };
 
@@ -21,8 +21,11 @@ function VisionDashboard({ onNavigate }) {
   const [deviceConnected, setDeviceConnected] = useState(false);
   const wsRef = useRef(null);
   const [navDestination, setNavDestination] = useState("");
-  const [location, setLocation] = useState(null); // { lat, lon } from backend status
+  const [location, setLocation] = useState(null); 
   const [navState, setNavState] = useState({ active: false, provider: null, dest: null, pending: false });
+  const [audioEnabled, setAudioEnabled] = useState(false);
+  const audioEnabledRef = useRef(false); 
+  const lastSpokenTextRef = useRef("");
   const commandsEnabled = backendConnected && deviceConnected;
   const reconnectTimeoutRef = useRef(null);
   const reconnectAttemptsRef = useRef(0);
@@ -45,7 +48,6 @@ function VisionDashboard({ onNavigate }) {
         const wasReconnecting = reconnectAttemptsRef.current > 0;
         reconnectAttemptsRef.current = 0;
         setBackendConnected(true);
-        // Force MJPEG <img> element to reconnect so the visible stream updates immediately.
         if (wasReconnecting) setVideoKey(Date.now());
         setLogs(prev => [
           ...prev,
@@ -80,8 +82,6 @@ function VisionDashboard({ onNavigate }) {
             const isHazard = data.log.includes("HAZARD");
             const isWarning = data.log.includes("WARNING");
 
-            // Navigation UX state: treat nav as a session (active/paused/stopped),
-            // not just a "mode" string, to prevent stuck or misleading UI.
             if (data.log.startsWith("NAVIGATION STARTED")) {
               setNavState({
                 active: true,
@@ -107,6 +107,9 @@ function VisionDashboard({ onNavigate }) {
           if (data.instruction) {
             setCurrentInstruction(data.instruction);
             
+            // Speak the instruction
+            speakInstruction(data.instruction);
+
             // Clear the instruction after 3 seconds if no new hazard appears
             setTimeout(() => setCurrentInstruction(""), 3000);
           }
@@ -115,9 +118,6 @@ function VisionDashboard({ onNavigate }) {
           if (data.mode && SYSTEM_MODES[data.mode]) {
             setActiveMode(SYSTEM_MODES[data.mode]);
 
-            // UI smoothing: OCR/TOOL are one-shot actions in this prototype.
-            // Backend may keep mode as OCR/TOOL after completing a single run, which is confusing.
-            // Treat OCR/TOOL as transient badges and auto-return to NORMAL shortly after.
             if (data.mode === "OCR" || data.mode === "TOOL") {
               if (transientModeResetRef.current) clearTimeout(transientModeResetRef.current);
               transientModeResetRef.current = setTimeout(() => {
@@ -128,9 +128,7 @@ function VisionDashboard({ onNavigate }) {
         } catch (e) {}
       };
 
-      ws.onerror = () => {
-        // onclose will also fire in most cases; keep logic centralized there.
-      };
+      ws.onerror = () => {};
 
       ws.onclose = () => {
         setBackendConnected(false);
@@ -172,7 +170,6 @@ function VisionDashboard({ onNavigate }) {
       return;
     }
 
-    // Give immediate UI feedback for one-shot actions.
     const cmd = String(payload?.command || "").toUpperCase();
     if (cmd === "FULL_OCR") {
       lastOneShotRef.current = { kind: "OCR", at: Date.now() };
@@ -198,7 +195,6 @@ function VisionDashboard({ onNavigate }) {
 
   const parseLatLon = (raw) => {
     const text = String(raw || "").trim();
-    // accepts: "5.41,100.33" or "5.41 100.33"
     const m = text.match(/^(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)$/);
     if (!m) return null;
     const lat = Number(m[1]);
@@ -224,6 +220,46 @@ function VisionDashboard({ onNavigate }) {
     const ns = lat >= 0 ? "N" : "S";
     const ew = lon >= 0 ? "E" : "W";
     return `${Math.abs(lat).toFixed(2)}° ${ns}, ${Math.abs(lon).toFixed(2)}° ${ew}`;
+  };
+
+  // TEXT-TO-SPEECH (TTS) ENGINE
+  const speakInstruction = (text, force = false) => {
+    const synth = window.speechSynthesis;
+  
+    if (!audioEnabledRef.current && !force)  return;
+  
+    // Normalize text to avoid "Stop" vs "Stop." problem
+    const normalize = (t) =>
+      String(t).toLowerCase().replace(/[^\w\s]/g, "").trim();
+  
+    const newText = normalize(text);
+    const currentText = normalize(lastSpokenTextRef.current);
+  
+    if (synth.speaking) {
+      if (newText === currentText) return; // Let current speech finish
+      else synth.cancel();
+    } 
+  
+    lastSpokenTextRef.current = text;
+  
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.1;
+    utterance.pitch = 1.0;
+  
+    synth.speak(utterance);
+  };
+
+  const toggleAudio = () => {
+    const newState = !audioEnabled;
+    setAudioEnabled(newState);
+    audioEnabledRef.current = newState; // Keep the ref synced with the state!
+
+    if (newState) {
+      speakInstruction("Voice assistant enabled.", true); 
+    } else {
+      window.speechSynthesis.cancel(); 
+      speakInstruction("Voice assistant muted.", true); 
+    }
   };
 
   return (
@@ -257,7 +293,7 @@ function VisionDashboard({ onNavigate }) {
           }
 
           /* NEW: Custom Animated Tooltip */
-          .clear-btn-container {
+          .btn-container {
               position: relative;
               display: inline-flex;
               align-items: center;
@@ -297,7 +333,7 @@ function VisionDashboard({ onNavigate }) {
           }
 
           /* Hover triggers the animation */
-          .clear-btn-container:hover .custom-tooltip {
+          .btn-container:hover .custom-tooltip {
               visibility: visible;
               opacity: 1;
               transform: translateY(0); /* Slide down smoothly */
@@ -544,6 +580,19 @@ function VisionDashboard({ onNavigate }) {
           </div>
           
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {/* Audio Toggle Button */}
+            <div className="btn-container">
+              <button 
+                onClick={toggleAudio}
+                style={{ 
+                  background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', padding: 0
+                }}
+              >
+                {audioEnabled ? <Volume2 size={18} color="#22c55e" /> : <VolumeX size={18} color="#ef4444" />}
+              </button>
+                <span className="custom-tooltip">{audioEnabled ? "Mute Voice Assistant" : "Enable Voice Assistant"}</span>
+            </div>
+
             {/* Active Commands Palette */}
             <div className={`cmd-container ${commandsEnabled ? "enabled" : "disabled"}`}>
               <button
@@ -629,7 +678,7 @@ function VisionDashboard({ onNavigate }) {
             </div>
 
             {/* Clear Logs */}
-            <div className="clear-btn-container">
+            <div className="btn-container">
               <button 
                 onClick={() => setLogs([])} 
                 style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'color 0.2s ease' }} 
@@ -647,30 +696,13 @@ function VisionDashboard({ onNavigate }) {
         {/* Logs Container */}
         <div className="custom-log-container" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '4px' }}>
           {logs.map((log, index) => (
-            
-            // Figma-style Layout: Icon on the left, pill on the right
             <div key={index} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              
-              {/* Icon sits OUTSIDE the background pill */}
               <Glasses size={14} color="#475569" style={{ flexShrink: 0 }} />
-              
-              {/* The Log Pill */}
-              <div style={{ 
-                backgroundColor: 'rgba(255, 255, 255, 0.04)', 
-                borderRadius: '8px', 
-                padding: '8px 12px', 
-                flex: 1,
-                borderLeft: `3px solid ${log.type === 'alert' ? '#ef4444' : log.type === 'error' ? '#f59e0b' : log.type === 'info' ? '#38bdf8' : '#22c55e'}`,
-                fontSize: '11px',
-                color: '#cbd5e1',
-                lineHeight: '1.4'
-              }}>
+              <div style={{ backgroundColor: 'rgba(255, 255, 255, 0.04)', borderRadius: '8px', padding: '8px 12px', flex: 1, borderLeft: `3px solid ${log.type === 'alert' ? '#ef4444' : log.type === 'error' ? '#f59e0b' : log.type === 'info' ? '#38bdf8' : '#22c55e'}`, fontSize: '11px', color: '#cbd5e1', lineHeight: '1.4' }}>
                 <span style={{ color: '#64748b', fontSize: '10px', display: 'block', marginBottom: '2px' }}>{log.time}</span>
                 <span style={{ wordBreak: 'break-word' }}>{log.text}</span>
               </div>
-
             </div>
-
           ))}
           <div ref={logsEndRef} />
         </div>
