@@ -1,6 +1,8 @@
 #include "esp_camera.h"
 #include <WiFi.h>
 #include <WebSocketsClient.h>
+#include <driver/i2s.h>
+#include <TinyGPS++.h>
 
 // ==========================================
 // 1. WiFi Credentials
@@ -11,7 +13,7 @@ const char* password = "Kailun2003";
 // ==========================================
 // 2. WebSocket Configuration
 // ==========================================
-const char* ws_host = "toolbar-determining-arbor-baltimore.trycloudflare.com";
+const char* ws_host = "seasons-runs-again-david.trycloudflare.com";
 const int ws_port = 443; 
 const char* ws_url = "/ws";
 
@@ -37,6 +39,24 @@ WebSocketsClient webSocket;
 #define HREF_GPIO_NUM     7
 #define PCLK_GPIO_NUM     13
 
+// ==========================================
+// 4. AUDIO PIN DEFINITIONS
+// ==========================================
+#define I2S_BCLK       41
+#define I2S_LRC        40
+#define I2S_DOUT       42
+#define MIC_IN_PIN     1
+
+// ==========================================
+// 5. GPS PIN DEFINITIONS
+// ==========================================
+#define GPS_RX_PIN 43
+#define GPS_TX_PIN 44
+
+TinyGPSPlus gps;
+HardwareSerial gpsSerial(1); 
+unsigned long last_gps_time = 0;
+
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
     case WStype_DISCONNECTED:
@@ -45,7 +65,40 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     case WStype_CONNECTED:
       Serial.println("SUCCESS: WebSocket Connected to Python Server!");
       break;
+    case WStype_BIN:
+      size_t bytes_written;
+      i2s_write(I2S_NUM_0, payload, length, &bytes_written, pdMS_TO_TICKS(100));
+      break;
   }
+}
+
+// Function to initialize the MAX98357 Speaker
+void initSpeaker() {
+  i2s_config_t i2s_config = {
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+    .sample_rate = 22050,
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+    .dma_buf_count = 4,
+    .dma_buf_len = 512,
+    .use_apll = false,
+    .tx_desc_auto_clear = true,
+    .fixed_mclk = 0
+  };
+
+  i2s_pin_config_t pin_config = {
+    .bck_io_num = I2S_BCLK,
+    .ws_io_num = I2S_LRC,
+    .data_out_num = I2S_DOUT,
+    .data_in_num = I2S_PIN_NO_CHANGE
+  };
+
+  i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
+  i2s_set_pin(I2S_NUM_0, &pin_config);
+  i2s_zero_dma_buffer(I2S_NUM_0);
+  Serial.println("[INFO] MAX98357 Speaker Initialized.");
 }
 
 void setup() {
@@ -53,6 +106,18 @@ void setup() {
   Serial.setDebugOutput(false);
   Serial.println("\n--- OUTDOOR EDGE DEVICE START ---");
 
+  // Initialize Microphone Pin
+  pinMode(MIC_IN_PIN, INPUT);
+  Serial.println("[INFO] MAX4466 Microphone Ready.");
+
+  // Initialize Speaker
+  initSpeaker();
+
+  // Initialize GPS Serial Communication
+  gpsSerial.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+  Serial.println("[INFO] GY-NEO-6M GPS Initialized.");
+
+  // Camera Config
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -121,6 +186,12 @@ void loop() {
 
   unsigned long current_time = millis();
   
+  // Read GPS Data constantly in the background
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read());
+  }
+
+  // Send Video Frames at 15 FPS
   if (current_time - last_transmission >= FRAME_DELAY) {
       camera_fb_t * fb = esp_camera_fb_get();
       if (fb) {
@@ -128,6 +199,16 @@ void loop() {
         esp_camera_fb_return(fb);
         last_transmission = millis(); 
       }
+  }
+
+  // Send GPS Data every 2 seconds
+  if (current_time - last_gps_time > 2000) {
+      if (gps.location.isValid()) {
+          char jsonPayload[100];
+          snprintf(jsonPayload, sizeof(jsonPayload), "{\"type\":\"gps\", \"lat\":%.6f, \"lon\":%.6f}", gps.location.lat(), gps.location.lng());
+          webSocket.sendTXT(jsonPayload);
+      }
+      last_gps_time = current_time;
   }
 
   // CRITICAL FOR STABILITY: Gives the WiFi modem time to clear its queue

@@ -8,6 +8,9 @@ import numpy as np
 import json
 import time
 from typing import Any, Dict, Optional
+import pyttsx3
+import wave
+import os
 
 # import four core system modules
 import hazard_detection as detect_hazard
@@ -18,6 +21,9 @@ import gps_navigation as gps
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+tts_engine = pyttsx3.init()
+tts_engine.setProperty('rate', 160)
 
 last_ocr_time = 0
 latest_frame = None
@@ -46,6 +52,49 @@ async def _broadcast(payload: Dict[str, Any]) -> None:
             await dash.send_text(msg)
         except:
             pass
+
+
+def generate_speech_pcm(text: str) -> Optional[bytes]:
+    """Converts text into raw 16-bit PCM binary audio data."""
+    try:
+        temp_filename = "temp_speech.wav"
+        # 1. Generate the spoken WAV file
+        tts_engine.save_to_file(text, temp_filename)
+        tts_engine.runAndWait()
+        
+        # 2. Extract the raw binary audio frames (skipping the WAV header)
+        with wave.open(temp_filename, 'rb') as wf:
+            pcm_data = wf.readframes(wf.getnframes())
+            
+        # 3. Clean up the temp file
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
+            
+        return pcm_data
+    except Exception as e:
+        print(f"[ERROR] Failed to generate TTS audio: {e}")
+        return None
+
+async def stream_audio_to_glasses(text: str):
+    """Streams the generated binary audio down the WebSocket to the ESP32."""
+    if edge_device_ws is None:
+        return
+    
+    # Run the heavy TTS generation in a background thread so video doesn't lag
+    pcm_bytes = await asyncio.to_thread(generate_speech_pcm, text)
+    
+    if pcm_bytes:
+        try:
+            # Send the raw audio binary data to the ESP32
+            CHUNK_SIZE = 1024
+
+            for i in range(0, len(pcm_bytes), CHUNK_SIZE):
+                chunk = pcm_bytes[i : i + CHUNK_SIZE]
+                await edge_device_ws.send_bytes(chunk)
+                await asyncio.sleep(0.02)
+
+        except Exception as e:
+            print(f"[ERROR] Audio Stream Failed: {e}")
 
 
 @app.get("/video_feed")
@@ -125,6 +174,7 @@ async def background_ai_worker():
                     if edge_device_ws:
                         try: await edge_device_ws.send_text(action_command)
                         except: pass
+                    await stream_audio_to_glasses(audio_instruction)
                     await _broadcast({"type": "log", "log": log_message, "instruction": audio_instruction, "mode": active_mode})
                     is_currently_safe = False 
 
@@ -133,6 +183,7 @@ async def background_ai_worker():
                         if edge_device_ws:
                             try: await edge_device_ws.send_text(action_command)
                             except: pass
+                        await stream_audio_to_glasses(audio_instruction)
                         await _broadcast({"type": "log", "log": log_message, "instruction": audio_instruction, "mode": active_mode})
                         is_currently_safe = True
 
@@ -141,6 +192,7 @@ async def background_ai_worker():
                 instr = nav_session.next_instruction()
                 last_nav_push = time.time()
                 if instr:
+                    await stream_audio_to_glasses(instr)
                     await _broadcast({"type": "log", "log": f"NAVIGATION: {instr}", "instruction": instr, "mode": active_mode})
 
             # 6. MODULE 3: Proactive OCR Scanning
@@ -160,6 +212,7 @@ async def background_ai_worker():
                     if edge_device_ws: 
                         try: await edge_device_ws.send_text("ALERT: MOTOR_BOTH") 
                         except: pass
+                    await stream_audio_to_glasses(instruction_str)
                     await _broadcast(payload)
                         
                 last_ocr_time = current_time
@@ -175,7 +228,6 @@ async def edge_endpoint(websocket: WebSocket):
     await websocket.accept()
     edge_device_ws = websocket
     print("[SUCCESS] ESP32 Edge Device Connected!")
-    
     await _broadcast({"type": "status", "device_connected": True, "log": "SUCCESS: ESP32 Connected."})
 
     # Fire up the background AI worker when the camera connects
@@ -183,9 +235,8 @@ async def edge_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            # Simply catch the frames as the ESP32 "firehoses" them to us.
-            # No waiting, no "NEXT" commands, no network ping-pong.
             data = await websocket.receive()
+            # HANDLE INCOMING VIDEO FRAMES
             if "bytes" in data:
                 raw_bytes = data["bytes"]
                 
@@ -196,6 +247,25 @@ async def edge_endpoint(websocket: WebSocket):
                 
                 # Continuously overwrite the buffer with the absolute freshest frame.
                 raw_frame_buffer = img
+
+            # HANDLE INCOMING GPS TEXT DATA
+            elif "text" in data:
+                try:
+                    payload = json.loads(data["text"])
+                    if payload.get("type") == "gps":
+                        global current_location
+                        # Update the server's master location
+                        current_location = (payload["lat"], payload["lon"])
+                        
+                        # Immediately broadcast the new physical location to the React Dashboard
+                        await _broadcast({
+                            "type": "status",
+                            "device_connected": True,
+                            "mode": active_mode,
+                            "location": {"lat": current_location[0], "lon": current_location[1]}
+                        })
+                except Exception as e:
+                    print(f"Error parsing text payload from ESP32: {e}")
 
     except WebSocketDisconnect:
         edge_device_ws = None
@@ -262,6 +332,7 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
             return
         text, kws = recognize_character.analyze_text(latest_frame.copy())
         if not text:
+            await stream_audio_to_glasses("No readable text detected.")
             await websocket.send_text(json.dumps({"type": "log", "log": "OCR: No readable text detected.", "mode": active_mode, "instruction": "No readable text detected."}))
             return
         payload = {
@@ -271,6 +342,7 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
             "mode": active_mode,
             "ocr_keywords": [k.upper() for k in kws],
         }
+        await stream_audio_to_glasses(text[:240])
         await _broadcast(payload)
         return
 
@@ -282,9 +354,12 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
         img, tools = recognize_tool.analyze_tools(latest_frame.copy())
         latest_frame = img
         if not tools:
+            await stream_audio_to_glasses("No tools detected.")
             await _broadcast({"type": "log", "log": "TOOLS: No tools detected (or model not configured).", "instruction": "No tools detected.", "mode": active_mode})
             return
         names = ", ".join(sorted({t["name"] for t in tools}))
+        instruction_str = f"{names} is detected"
+        await stream_audio_to_glasses(instruction_str)
         await _broadcast({"type": "log", "log": f"TOOLS DETECTED: {names}", "instruction": f"Detected: {names}", "mode": active_mode, "tools": tools})
         return
 
@@ -302,12 +377,14 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
                 except Exception:
                     dest = None
         if dest is None:
+            await stream_audio_to_glasses("Destination not set.")
             await _broadcast({"type": "log", "log": "NAVIGATION: Destination not set. Provide a place name (enable geocoding) or dest_lat/dest_lon.", "mode": active_mode})
             return
 
         start = current_location
         plan = gps.plan_navigation(start, dest)
         nav_session.start(plan)
+        await stream_audio_to_glasses("Navigation started.")
         await _broadcast(
             {
                 "type": "log",
@@ -322,6 +399,7 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
     if command == "NAV_STOP":
         nav_session.stop()
         active_mode = "NORMAL"
+        await stream_audio_to_glasses("Navigation stopped.")
         await _broadcast({"type": "log", "log": "NAVIGATION STOPPED.", "instruction": "Navigation stopped.", "mode": active_mode})
         return
 

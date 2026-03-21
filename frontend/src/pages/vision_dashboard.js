@@ -21,7 +21,7 @@ function VisionDashboard({ onNavigate }) {
   const [deviceConnected, setDeviceConnected] = useState(false);
   const wsRef = useRef(null);
   const [navDestination, setNavDestination] = useState("");
-  const navDestRef = useRef(""); // NEW: Keeps STT synced with destination input
+  const navDestRef = useRef("");
   const [location, setLocation] = useState(null); 
   const [navState, setNavState] = useState({ active: false, provider: null, dest: null, pending: false });
   const [audioEnabled, setAudioEnabled] = useState(false);
