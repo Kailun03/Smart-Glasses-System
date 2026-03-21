@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Terminal, Trash2, Server, Cpu, Glasses, LogOut, Battery, Navigation, Command, Volume2, VolumeX } from 'lucide-react';
+import { Activity, Terminal, Trash2, Server, Cpu, Glasses, LogOut, Battery, Navigation, Command, Volume2, VolumeX, Mic, MicOff } from 'lucide-react'; // Added Mic & MicOff
 
 const SYSTEM_MODES = {
   NORMAL: { id: 'NORMAL', label: 'Normal Mode', color: 'transparent' },
@@ -21,11 +21,17 @@ function VisionDashboard({ onNavigate }) {
   const [deviceConnected, setDeviceConnected] = useState(false);
   const wsRef = useRef(null);
   const [navDestination, setNavDestination] = useState("");
+  const navDestRef = useRef(""); // NEW: Keeps STT synced with destination input
   const [location, setLocation] = useState(null); 
   const [navState, setNavState] = useState({ active: false, provider: null, dest: null, pending: false });
   const [audioEnabled, setAudioEnabled] = useState(false);
   const audioEnabledRef = useRef(false); 
   const lastSpokenTextRef = useRef("");
+  
+  const [isListening, setIsListening] = useState(false);
+  const isListeningRef = useRef(false);
+  const recognitionRef = useRef(null);
+
   const commandsEnabled = backendConnected && deviceConnected;
   const reconnectTimeoutRef = useRef(null);
   const reconnectAttemptsRef = useRef(0);
@@ -35,6 +41,80 @@ function VisionDashboard({ onNavigate }) {
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
+
+  // SPEECH-TO-TEXT (VOICE COMMANDS) ENGINE
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+
+      recognition.onresult = (event) => {
+        // Guard: Do not listen if the system is currently speaking (Prevents echo loops)
+        if (window.speechSynthesis.speaking) return;
+
+        const transcript = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
+        
+        // Visual feedback in the terminal that the system heard you
+        setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: `[Heard] "${transcript}"`, type: "info" }]);
+
+        // Voice Command Routing
+        if (transcript.includes("read text") || transcript.includes("full ocr") || transcript.includes("scan text")) {
+          sendCommand({ command: "FULL_OCR" });
+        } 
+        else if (transcript.includes("scan tool") || transcript.includes("find tool")) {
+          sendCommand({ command: "TOOLS_SCAN" });
+        } 
+        else if (transcript.includes("stop navigation") || transcript.includes("cancel navigation")) {
+          sendCommand({ command: "NAV_STOP" });
+        } 
+        else if (transcript.includes("navigate to")) {
+          const dest = transcript.split("navigate to")[1].trim();
+          if (dest) {
+            setNavDestination(dest);
+            navDestRef.current = dest; // Sync the ref!
+            sendCommand({ command: "NAV_START", destination: dest });
+          }
+        } 
+        else if (transcript.includes("start navigation")) {
+          startNavigation();
+        }
+      };
+
+      recognition.onend = () => {
+        // If it drops automatically but the user still wants it on, restart it instantly.
+        if (isListeningRef.current) {
+           try { recognition.start(); } catch(e) {}
+        }
+      };
+
+      recognitionRef.current = recognition;
+    }
+
+    return () => {
+      if (recognitionRef.current) recognitionRef.current.stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const toggleListening = () => {
+    if (!recognitionRef.current) {
+      setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: "🎤 Speech Recognition not supported in this browser.", type: "error" }]);
+      return;
+    }
+    const newState = !isListening;
+    setIsListening(newState);
+    isListeningRef.current = newState;
+
+    if (newState) {
+      try { recognitionRef.current.start(); } catch(e) {}
+      speakInstruction("Voice commands activated.", true);
+    } else {
+      recognitionRef.current.stop();
+      speakInstruction("Voice commands deactivated.", true);
+    }
+  };
 
   // WebSocket Connection
   useEffect(() => {
@@ -205,12 +285,13 @@ function VisionDashboard({ onNavigate }) {
   };
 
   const startNavigation = () => {
-    const coords = parseLatLon(navDestination);
+    // FIX: Must use navDestRef.current here so voice commands don't trigger stale state closures!
+    const coords = parseLatLon(navDestRef.current);
     if (coords) {
-      sendCommand({ command: "NAV_START", dest_lat: coords.lat, dest_lon: coords.lon, destination: navDestination });
+      sendCommand({ command: "NAV_START", dest_lat: coords.lat, dest_lon: coords.lon, destination: navDestRef.current });
       return;
     }
-    sendCommand({ command: "NAV_START", destination: navDestination });
+    sendCommand({ command: "NAV_START", destination: navDestRef.current });
   };
 
   const navPaused = navState.active && !deviceConnected;
@@ -236,7 +317,7 @@ function VisionDashboard({ onNavigate }) {
     const currentText = normalize(lastSpokenTextRef.current);
   
     if (synth.speaking) {
-      if (newText === currentText) return; // Let current speech finish
+      if (newText === currentText) return; 
       else synth.cancel();
     } 
   
@@ -252,7 +333,7 @@ function VisionDashboard({ onNavigate }) {
   const toggleAudio = () => {
     const newState = !audioEnabled;
     setAudioEnabled(newState);
-    audioEnabledRef.current = newState; // Keep the ref synced with the state!
+    audioEnabledRef.current = newState;
 
     if (newState) {
       speakInstruction("Voice assistant enabled.", true); 
@@ -292,7 +373,7 @@ function VisionDashboard({ onNavigate }) {
               50% { opacity: 1; }
           }
 
-          /* NEW: Custom Animated Tooltip */
+          /* Custom Animated Tooltip */
           .btn-container {
               position: relative;
               display: inline-flex;
@@ -310,36 +391,34 @@ function VisionDashboard({ onNavigate }) {
               padding: 6px 12px;
               position: absolute;
               z-index: 100;
-              top: 130%; /* Drop it just below the button */
-              right: 0; /* Align it to the right edge */
+              top: 130%; 
+              right: 0; 
               font-size: 11px;
               white-space: nowrap;
               font-weight: 600;
               letter-spacing: 0.5px;
-              transform: translateY(-8px); /* Start slightly high */
+              transform: translateY(-8px); 
               transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
               box-shadow: 0 4px 12px rgba(0,0,0,0.5);
           }
           
-          /* Tooltip little up-arrow pointer */
           .custom-tooltip::after {
               content: "";
               position: absolute;
               bottom: 100%;
-              right: 8px; /* Arrow position */
+              right: 8px; 
               border-width: 5px;
               border-style: solid;
               border-color: transparent transparent #1e293b transparent;
           }
 
-          /* Hover triggers the animation */
           .btn-container:hover .custom-tooltip {
               visibility: visible;
               opacity: 1;
-              transform: translateY(0); /* Slide down smoothly */
+              transform: translateY(0); 
           }
 
-          /* Command Palette (hover dropdown) */
+          /* Command Palette */
           .cmd-container {
               position: relative;
               display: inline-flex;
@@ -427,6 +506,84 @@ function VisionDashboard({ onNavigate }) {
               opacity: 1;
               transform: translateY(0);
           }
+
+          .media-btn-container {
+              position: relative;
+              display: inline-flex;
+              align-items: center;
+          }
+
+          .media-toggle-btn {
+              background: rgba(255, 255, 255, 0.05);
+              border: 1px solid rgba(255, 255, 255, 0.1);
+              border-radius: 50%;
+              width: 32px;
+              height: 32px;
+              display: flex;
+              justify-content: center;
+              align-items: center;
+              cursor: pointer;
+              transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+          }
+
+          .media-toggle-btn:hover {
+              background: rgba(255, 255, 255, 0.15);
+              transform: translateY(-2px) scale(1.02);
+          }
+
+          /* Glowing Effects for Active States */
+          .media-toggle-btn.mic-active {
+              background: rgba(56, 189, 248, 0.15);
+              border-color: rgba(56, 189, 248, 0.4);
+              box-shadow: 0 0 15px rgba(56, 189, 248, 0.3);
+          }
+
+          .media-toggle-btn.audio-active {
+              background: rgba(34, 197, 94, 0.15);
+              border-color: rgba(34, 197, 94, 0.4);
+              box-shadow: 0 0 15px rgba(34, 197, 94, 0.3);
+          }
+
+          /* Upward Tooltip for Bottom Left placement */
+          .custom-tooltip-up {
+              visibility: hidden;
+              opacity: 0;
+              background-color: #1e293b;
+              color: #f8fafc;
+              border: 1px solid #334155;
+              text-align: center;
+              border-radius: 6px;
+              padding: 6px 12px;
+              position: absolute;
+              z-index: 100;
+              bottom: 140%; 
+              left: 50%; 
+              transform: translateX(-50%) translateY(8px);
+              font-size: 11px;
+              white-space: nowrap;
+              font-weight: 600;
+              letter-spacing: 0.5px;
+              transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+              box-shadow: 0 -4px 12px rgba(0,0,0,0.5);
+          }
+
+          .custom-tooltip-up::after {
+              content: "";
+              position: absolute;
+              top: 100%;
+              left: 50%;
+              transform: translateX(-50%);
+              border-width: 5px;
+              border-style: solid;
+              border-color: #1e293b transparent transparent transparent;
+          }
+
+          .media-btn-container:hover .custom-tooltip-up {
+              visibility: visible;
+              opacity: 1;
+              transform: translateX(-50%) translateY(0);
+          }
+
       `}</style>
 
       {/* LEFT PANEL: Camera Feed & Overlays */}
@@ -435,10 +592,7 @@ function VisionDashboard({ onNavigate }) {
         {/* Offline Overlay */}
         {!deviceConnected && (
             <div style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', color: '#ef4444', zIndex: 10 }}>
-                <Activity 
-                  size={32} 
-                  style={{ marginBottom: '12px', animation: 'subtleBreathe 3s infinite ease-in-out' }} 
-                />
+                <Activity size={32} style={{ marginBottom: '12px', animation: 'subtleBreathe 3s infinite ease-in-out' }} />
                 <h2 style={{ margin: 0, letterSpacing: '2px', fontSize: '18px', animation: 'subtleBreathe 3s infinite ease-in-out', animationDelay: '0.2s' }}>
                   NO VIDEO SIGNAL
                 </h2>
@@ -514,9 +668,48 @@ function VisionDashboard({ onNavigate }) {
                 </div>
               </>
             )}
-
         </div>
 
+        {/* BOTTOM LEFT OVERLAY: Voice & Audio Controls */}
+        <div style={{ 
+            position: 'absolute', 
+            bottom: '24px', 
+            left: '24px', 
+            backgroundColor: 'rgba(0, 0, 0, 0.4)', 
+            backdropFilter: 'blur(12px)', 
+            padding: '8px 10px', 
+            borderRadius: '28px', 
+            display: 'flex', 
+            gap: '8px', 
+            alignItems: 'center', 
+            zIndex: 50 
+        }}>
+            {/* Microphone Toggle Button */}
+            <div className="media-btn-container">
+              <button 
+                onClick={toggleListening}
+                className={`media-toggle-btn ${isListening ? 'mic-active' : ''}`}
+              >
+                {isListening ? <Mic size={18} color="#38bdf8" /> : <MicOff size={18} color="#0277bd" />}
+              </button>
+              <span className="custom-tooltip-up">{isListening ? "Disable Voice Commands" : "Enable Voice Commands"}</span>
+            </div>
+
+            {/* Divider */}
+            <div style={{ width: '1px', height: '28px', backgroundColor: 'rgba(255,255,255,0.2)' }}></div>
+
+            {/* Audio Speaker Toggle Button */}
+            <div className="media-btn-container">
+              <button 
+                onClick={toggleAudio}
+                className={`media-toggle-btn ${audioEnabled ? 'audio-active' : ''}`}
+              >
+                {audioEnabled ? <Volume2 size={18} color="#22c55e" /> : <VolumeX size={18} color="#ef4444" />}
+              </button>
+              <span className="custom-tooltip-up">{audioEnabled ? "Mute Voice Assistant" : "Enable Voice Assistant"}</span>
+            </div>
+        </div>
+        
         {/* High-Priority Instructions */}
         {currentInstruction && currentInstruction !== "Path is clear." && (
           <div style={{ 
@@ -580,33 +773,15 @@ function VisionDashboard({ onNavigate }) {
           </div>
           
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            {/* Audio Toggle Button */}
-            <div className="btn-container">
-              <button 
-                onClick={toggleAudio}
-                style={{ 
-                  background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', padding: 0
-                }}
-              >
-                {audioEnabled ? <Volume2 size={18} color="#22c55e" /> : <VolumeX size={18} color="#ef4444" />}
-              </button>
-                <span className="custom-tooltip">{audioEnabled ? "Mute Voice Assistant" : "Enable Voice Assistant"}</span>
-            </div>
 
             {/* Active Commands Palette */}
             <div className={`cmd-container ${commandsEnabled ? "enabled" : "disabled"}`}>
-              <button
-                className={`cmd-btn ${commandsEnabled ? "" : "disabled"}`}
-                onClick={(e) => e.preventDefault()}
-                aria-label="Active Commands"
-              >
+              <button className={`cmd-btn ${commandsEnabled ? "" : "disabled"}`} onClick={(e) => e.preventDefault()} aria-label="Active Commands">
                 <Command size={18} />
               </button>
 
               {!commandsEnabled && (
-                <span className="cmd-tooltip">
-                  Commands locked: {backendConnected ? "Edge offline" : "Host offline"}.
-                </span>
+                <span className="cmd-tooltip">Commands locked: {backendConnected ? "Edge offline" : "Host offline"}.</span>
               )}
 
               {commandsEnabled && (
@@ -614,9 +789,7 @@ function VisionDashboard({ onNavigate }) {
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <div style={{ width: 8, height: 8, borderRadius: 999, backgroundColor: '#22c55e', boxShadow: '0 0 12px rgba(34,197,94,0.55)' }} />
-                      <span style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '0.6px', textTransform: 'uppercase', color: '#e2e8f0' }}>
-                        Active Commands
-                      </span>
+                      <span style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '0.6px', textTransform: 'uppercase', color: '#e2e8f0' }}>Active Commands</span>
                     </div>
                     <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 700 }}>Hover to keep open</span>
                   </div>
@@ -625,16 +798,14 @@ function VisionDashboard({ onNavigate }) {
                     <button
                       onClick={() => sendCommand({ command: "FULL_OCR" })}
                       style={{ flex: 1, backgroundColor: 'rgba(56, 189, 248, 0.10)', border: '1px solid rgba(56, 189, 248, 0.25)', color: '#f8fafc', padding: '10px', borderRadius: '10px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, transition: 'transform 0.15s ease' }}
-                      onMouseOver={(e) => (e.currentTarget.style.transform = 'translateY(-1px)')}
-                      onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
+                      onMouseOver={(e) => (e.currentTarget.style.transform = 'translateY(-1px)')} onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
                     >
                       Full OCR
                     </button>
                     <button
                       onClick={() => sendCommand({ command: "TOOLS_SCAN" })}
                       style={{ flex: 1, backgroundColor: 'rgba(45, 212, 191, 0.10)', border: '1px solid rgba(45, 212, 191, 0.25)', color: '#f8fafc', padding: '10px', borderRadius: '10px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, transition: 'transform 0.15s ease' }}
-                      onMouseOver={(e) => (e.currentTarget.style.transform = 'translateY(-1px)')}
-                      onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
+                      onMouseOver={(e) => (e.currentTarget.style.transform = 'translateY(-1px)')} onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
                     >
                       Scan Tools
                     </button>
@@ -643,8 +814,11 @@ function VisionDashboard({ onNavigate }) {
                   <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                     <input
                       value={navDestination}
-                      onChange={(e) => setNavDestination(e.target.value)}
-                      placeholder="Destination: 'lat,lon' or place (needs geocoding)"
+                      onChange={(e) => { 
+                        setNavDestination(e.target.value); 
+                        navDestRef.current = e.target.value; 
+                      }}
+                      placeholder="Destination: 'lat,lon' or place"
                       style={{ width: '93%', backgroundColor: 'rgba(2, 6, 23, 0.75)', border: '1px solid rgba(148, 163, 184, 0.20)', color: '#f8fafc', padding: '10px 10px', borderRadius: '10px', fontSize: '12px' }}
                     />
                     <div style={{ display: 'flex', gap: '16px' }}>
@@ -652,8 +826,7 @@ function VisionDashboard({ onNavigate }) {
                         onClick={startNavigation}
                         disabled={!navDestination.trim() || navState.pending}
                         style={{ flex: 1, backgroundColor: 'rgba(34, 197, 94, 0.12)', border: '1px solid rgba(34, 197, 94, 0.28)', color: '#f8fafc', padding: '10px 12px', borderRadius: '10px', cursor: (!navDestination.trim() || navState.pending) ? 'not-allowed' : 'pointer', opacity: (!navDestination.trim() || navState.pending) ? 0.55 : 1, fontSize: '12px', fontWeight: 900, letterSpacing: '0.3px', transition: 'transform 0.15s ease' }}
-                        onMouseOver={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.transform = 'translateY(-1px)'; }}
-                        onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
+                        onMouseOver={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.transform = 'translateY(-1px)'; }} onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
                       >
                         {navState.pending ? "Starting…" : "Start"}
                       </button>
@@ -661,15 +834,14 @@ function VisionDashboard({ onNavigate }) {
                         onClick={() => sendCommand({ command: "NAV_STOP" })}
                         disabled={!navState.active && !navState.pending}
                         style={{ flex: 1, backgroundColor: 'rgba(239, 68, 68, 0.10)', border: '1px solid rgba(239, 68, 68, 0.25)', color: '#f8fafc', padding: '10px 12px', borderRadius: '10px', cursor: (!navState.active && !navState.pending) ? 'not-allowed' : 'pointer', opacity: (!navState.active && !navState.pending) ? 0.55 : 1, fontSize: '12px', fontWeight: 900, letterSpacing: '0.3px', transition: 'transform 0.15s ease' }}
-                        onMouseOver={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.transform = 'translateY(-1px)'; }}
-                        onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
+                        onMouseOver={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.transform = 'translateY(-1px)'; }} onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
                       >
                         Stop
                       </button>
                     </div>
                     {(navState.active || navState.pending) && (
                       <div style={{ marginTop: '10px', fontSize: '10px', color: '#94a3b8', fontWeight: 700 }}>
-                        {navPaused ? "Navigation paused: EDGE offline (will resume when video reconnects)." : navState.active ? `Navigation active${navState.provider ? ` (${navState.provider})` : ""}.` : "Starting navigation…"}
+                        {navPaused ? "Navigation paused: EDGE offline." : navState.active ? `Navigation active.` : "Starting navigation…"}
                       </div>
                     )}
                   </div>
