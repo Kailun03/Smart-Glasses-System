@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Terminal, Trash2, Server, Cpu, Glasses, LogOut, Battery, Navigation, Command, Volume2, VolumeX, Mic, MicOff } from 'lucide-react'; // Added Mic & MicOff
+import { Activity, Terminal, Trash2, Server, Cpu, Glasses, LogOut, Battery, Navigation, Command, Volume2, VolumeX, Mic, MicOff } from 'lucide-react';
 
 const SYSTEM_MODES = {
   NORMAL: { id: 'NORMAL', label: 'Normal Mode', color: 'transparent' },
@@ -32,6 +32,13 @@ function VisionDashboard({ onNavigate }) {
   const isListeningRef = useRef(false);
   const recognitionRef = useRef(null);
 
+  // ==========================================
+  // NEW: WAKE WORD ("SIRI") STATE
+  // ==========================================
+  const [isAwake, setIsAwake] = useState(false);
+  const isAwakeRef = useRef(false);
+  const sleepTimerRef = useRef(null);
+
   const commandsEnabled = backendConnected && deviceConnected;
   const reconnectTimeoutRef = useRef(null);
   const reconnectAttemptsRef = useRef(0);
@@ -41,6 +48,30 @@ function VisionDashboard({ onNavigate }) {
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
+
+  // ==========================================
+  // NEW: WAKE / SLEEP TIMER FUNCTIONS
+  // ==========================================
+  const wakeUpSystem = () => {
+    setIsAwake(true);
+    isAwakeRef.current = true;
+    speakInstruction("I'm listening.", true); 
+    resetSleepTimer();
+  };
+
+  const goToSleep = () => {
+    setIsAwake(false);
+    isAwakeRef.current = false;
+    if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
+  };
+
+  const resetSleepTimer = () => {
+    if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
+    sleepTimerRef.current = setTimeout(() => {
+      goToSleep();
+      setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: "INFO: Listener went back to sleep.", type: "info" }]);
+    }, 6000); // 6 second active window
+  };
 
   // SPEECH-TO-TEXT (VOICE COMMANDS) ENGINE
   useEffect(() => {
@@ -56,34 +87,56 @@ function VisionDashboard({ onNavigate }) {
 
         const transcript = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
         
-        // Visual feedback in the terminal that the system heard you
-        setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: `[Heard] "${transcript}"`, type: "info" }]);
+        // ==========================================
+        // NEW: WAKE WORD DETECTION LOGIC
+        // ==========================================
+        if (!isAwakeRef.current) {
+           // If asleep, ONLY listen for the magic words
+           if (transcript.includes("hey glasses") || transcript.includes("wake up") || transcript.includes("okay glasses")) {
+               wakeUpSystem();
+           } else {
+               // Silently ignore all other background conversation
+               console.log("Ignored background speech:", transcript);
+           }
+           return; 
+        }
 
-        // Voice Command Routing
+        // ACTIVE COMMAND PROCESSING (If awake)
+        setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: `[ Command Heard ] "${transcript}"`, type: "info" }]);
+
         if (transcript.includes("read text") || transcript.includes("full ocr") || transcript.includes("scan text")) {
           sendCommand({ command: "FULL_OCR" });
+          goToSleep();
         } 
         else if (transcript.includes("scan tool") || transcript.includes("find tool")) {
           sendCommand({ command: "TOOLS_SCAN" });
+          goToSleep();
         } 
         else if (transcript.includes("stop navigation") || transcript.includes("cancel navigation")) {
           sendCommand({ command: "NAV_STOP" });
+          goToSleep();
         } 
         else if (transcript.includes("navigate to")) {
           const dest = transcript.split("navigate to")[1].trim();
           if (dest) {
             setNavDestination(dest);
-            navDestRef.current = dest; // Sync the ref!
+            navDestRef.current = dest; 
             sendCommand({ command: "NAV_START", destination: dest });
           }
+          goToSleep();
         } 
         else if (transcript.includes("start navigation")) {
           startNavigation();
+          goToSleep();
+        }
+        else {
+          // If they are awake but said something we don't understand, reset the timer to give them more time
+          speakInstruction("Sorry, I don't understand your command. Please try again.")
+          resetSleepTimer();
         }
       };
 
       recognition.onend = () => {
-        // If it drops automatically but the user still wants it on, restart it instantly.
         if (isListeningRef.current) {
            try { recognition.start(); } catch(e) {}
         }
@@ -94,6 +147,7 @@ function VisionDashboard({ onNavigate }) {
 
     return () => {
       if (recognitionRef.current) recognitionRef.current.stop();
+      if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current); // Cleanup timer
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -112,6 +166,7 @@ function VisionDashboard({ onNavigate }) {
       speakInstruction("Voice commands activated.", true);
     } else {
       recognitionRef.current.stop();
+      goToSleep(); // Force sleep if mic is turned off
       speakInstruction("Voice commands deactivated.", true);
     }
   };
@@ -153,7 +208,6 @@ function VisionDashboard({ onNavigate }) {
               }
           }
 
-          // Catch log instruction
           if (data.log) {
             if (data.type !== "status") {
               setDeviceConnected(true); 
@@ -183,18 +237,12 @@ function VisionDashboard({ onNavigate }) {
             }]);
           }
 
-          // Catch the new instruction field
           if (data.instruction) {
             setCurrentInstruction(data.instruction);
-            
-            // Speak the instruction
             speakInstruction(data.instruction);
-
-            // Clear the instruction after 3 seconds if no new hazard appears
             setTimeout(() => setCurrentInstruction(""), 3000);
           }
 
-          // Catch mode updates from backend
           if (data.mode && SYSTEM_MODES[data.mode]) {
             setActiveMode(SYSTEM_MODES[data.mode]);
 
@@ -222,7 +270,7 @@ function VisionDashboard({ onNavigate }) {
 
         reconnectAttemptsRef.current += 1;
         const attempt = reconnectAttemptsRef.current;
-        const delayMs = Math.min(5000, 600 * attempt); // backoff cap at 5s
+        const delayMs = Math.min(5000, 600 * attempt);
 
         if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = setTimeout(() => {
@@ -247,6 +295,7 @@ function VisionDashboard({ onNavigate }) {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: "Backend not connected. Command not sent.", type: "error" }]);
+      speakInstruction("Backend not connected. Command not sent.")
       return;
     }
 
@@ -285,7 +334,6 @@ function VisionDashboard({ onNavigate }) {
   };
 
   const startNavigation = () => {
-    // FIX: Must use navDestRef.current here so voice commands don't trigger stale state closures!
     const coords = parseLatLon(navDestRef.current);
     if (coords) {
       sendCommand({ command: "NAV_START", dest_lat: coords.lat, dest_lon: coords.lon, destination: navDestRef.current });
@@ -303,13 +351,11 @@ function VisionDashboard({ onNavigate }) {
     return `${Math.abs(lat).toFixed(2)}° ${ns}, ${Math.abs(lon).toFixed(2)}° ${ew}`;
   };
 
-  // TEXT-TO-SPEECH (TTS) ENGINE
   const speakInstruction = (text, force = false) => {
     const synth = window.speechSynthesis;
   
     if (!audioEnabledRef.current && !force)  return;
   
-    // Normalize text to avoid "Stop" vs "Stop." problem
     const normalize = (t) =>
       String(t).toLowerCase().replace(/[^\w\s]/g, "").trim();
   
@@ -347,243 +393,72 @@ function VisionDashboard({ onNavigate }) {
     <div style={{ display: 'flex', height: '100vh', width: '100vw', backgroundColor: '#0f172a', fontFamily: 'system-ui, sans-serif', color: '#e2e8f0', overflow: 'hidden' }}>
       
       <style>{`
-        /* Target only our log container */
-          .custom-log-container::-webkit-scrollbar {
-              width: 5px; 
-              margin-right: -5px; 
-          }
-          
-          .custom-log-container::-webkit-scrollbar-track {
-              background: transparent; 
-          }
-          
-          .custom-log-container::-webkit-scrollbar-thumb {
-              background-color: #475569; 
-              border-radius: 4px; 
-              border: 1px solid transparent; 
-          }
+          .custom-log-container::-webkit-scrollbar { width: 5px; margin-right: -5px; }
+          .custom-log-container::-webkit-scrollbar-track { background: transparent; }
+          .custom-log-container::-webkit-scrollbar-thumb { background-color: #475569; border-radius: 4px; border: 1px solid transparent; }
+          .custom-log-container::-webkit-scrollbar-thumb:hover { background-color: #64748b; }
 
-          .custom-log-container::-webkit-scrollbar-thumb:hover {
-              background-color: #64748b; 
-          }
-
-          /* Subtle Breathing Animation */
           @keyframes subtleBreathe {
               0%, 100% { opacity: 0.6; }
               50% { opacity: 1; }
           }
 
-          /* Custom Animated Tooltip */
-          .btn-container {
-              position: relative;
-              display: inline-flex;
-              align-items: center;
-          }
+          .btn-container { position: relative; display: inline-flex; align-items: center; }
           
           .custom-tooltip {
-              visibility: hidden;
-              opacity: 0;
-              background-color: #1e293b;
-              color: #f8fafc;
-              border: 1px solid #334155;
-              text-align: center;
-              border-radius: 6px;
-              padding: 6px 12px;
-              position: absolute;
-              z-index: 100;
-              top: 130%; 
-              right: 0; 
-              font-size: 11px;
-              white-space: nowrap;
-              font-weight: 600;
-              letter-spacing: 0.5px;
-              transform: translateY(-8px); 
-              transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+              visibility: hidden; opacity: 0; background-color: #1e293b; color: #f8fafc; border: 1px solid #334155;
+              text-align: center; border-radius: 6px; padding: 6px 12px; position: absolute; z-index: 100;
+              top: 130%; right: 0; font-size: 11px; white-space: nowrap; font-weight: 600; letter-spacing: 0.5px;
+              transform: translateY(-8px); transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
               box-shadow: 0 4px 12px rgba(0,0,0,0.5);
           }
-          
           .custom-tooltip::after {
-              content: "";
-              position: absolute;
-              bottom: 100%;
-              right: 8px; 
-              border-width: 5px;
-              border-style: solid;
-              border-color: transparent transparent #1e293b transparent;
+              content: ""; position: absolute; bottom: 100%; right: 8px; border-width: 5px; border-style: solid; border-color: transparent transparent #1e293b transparent;
           }
+          .btn-container:hover .custom-tooltip { visibility: visible; opacity: 1; transform: translateY(0); }
 
-          .btn-container:hover .custom-tooltip {
-              visibility: visible;
-              opacity: 1;
-              transform: translateY(0); 
-          }
-
-          /* Command Palette */
-          .cmd-container {
-              position: relative;
-              display: inline-flex;
-              align-items: center;
-          }
-
-          .cmd-btn {
-              background: none;
-              border: none;
-              color: #64748b;
-              cursor: pointer;
-              display: flex;
-              align-items: center;
-              transition: color 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
-          }
-
-          .cmd-btn:hover {
-              color: #38bdf8;
-              transform: translateY(-1px);
-          }
-
-          .cmd-btn.disabled {
-              cursor: not-allowed;
-              opacity: 0.55;
-          }
+          .cmd-container { position: relative; display: inline-flex; align-items: center; }
+          .cmd-btn { background: none; border: none; color: #64748b; cursor: pointer; display: flex; align-items: center; transition: color 0.2s ease, transform 0.2s ease, opacity 0.2s ease; }
+          .cmd-btn:hover { color: #38bdf8; transform: translateY(-1px); }
+          .cmd-btn.disabled { cursor: not-allowed; opacity: 0.55; }
 
           .cmd-tooltip {
-              visibility: hidden;
-              opacity: 0;
-              background-color: #0b1220;
-              color: #f8fafc;
-              border: 1px solid rgba(148, 163, 184, 0.22);
-              text-align: left;
-              border-radius: 10px;
-              padding: 8px 12px;
-              position: absolute;
-              z-index: 120;
-              top: 130%;
-              right: 0;
-              font-size: 11px;
-              white-space: nowrap;
-              font-weight: 700;
-              letter-spacing: 0.2px;
-              transform: translateY(-10px);
-              transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
-              box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+              visibility: hidden; opacity: 0; background-color: #0b1220; color: #f8fafc; border: 1px solid rgba(148, 163, 184, 0.22);
+              text-align: left; border-radius: 10px; padding: 8px 12px; position: absolute; z-index: 120; top: 130%; right: 0;
+              font-size: 11px; white-space: nowrap; font-weight: 700; letter-spacing: 0.2px; transform: translateY(-10px);
+              transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s; box-shadow: 0 10px 30px rgba(0,0,0,0.55);
           }
-
-          .cmd-tooltip::after {
-              content: "";
-              position: absolute;
-              bottom: 100%;
-              right: 10px;
-              border-width: 6px;
-              border-style: solid;
-              border-color: transparent transparent #0b1220 transparent;
-          }
+          .cmd-tooltip::after { content: ""; position: absolute; bottom: 100%; right: 10px; border-width: 6px; border-style: solid; border-color: transparent transparent #0b1220 transparent; }
 
           .cmd-panel {
-              visibility: hidden;
-              opacity: 0;
-              position: absolute;
-              top: 130%;
-              right: 0;
-              width: 284px;
+              visibility: hidden; opacity: 0; position: absolute; top: 130%; right: 0; width: 284px;
               background: radial-gradient(1200px 600px at 20% -20%, rgba(56, 189, 248, 0.16), rgba(0,0,0,0)), #0b1220;
-              border: 1px solid rgba(148, 163, 184, 0.22);
-              border-radius: 14px;
-              padding: 12px;
-              transform: translateY(-12px) scale(0.98);
-              transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.22s;
-              box-shadow: 0 18px 60px rgba(0,0,0,0.65);
-              z-index: 140;
-              backdrop-filter: blur(14px);
+              border: 1px solid rgba(148, 163, 184, 0.22); border-radius: 14px; padding: 12px; transform: translateY(-12px) scale(0.98);
+              transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.22s; box-shadow: 0 18px 60px rgba(0,0,0,0.65);
+              z-index: 140; backdrop-filter: blur(14px);
           }
+          .cmd-container.enabled:hover .cmd-panel { visibility: visible; opacity: 1; transform: translateY(0) scale(1); }
+          .cmd-container.disabled:hover .cmd-tooltip { visibility: visible; opacity: 1; transform: translateY(0); }
 
-          .cmd-container.enabled:hover .cmd-panel {
-              visibility: visible;
-              opacity: 1;
-              transform: translateY(0) scale(1);
-          }
-
-          .cmd-container.disabled:hover .cmd-tooltip {
-              visibility: visible;
-              opacity: 1;
-              transform: translateY(0);
-          }
-
-          .media-btn-container {
-              position: relative;
-              display: inline-flex;
-              align-items: center;
-          }
-
+          .media-btn-container { position: relative; display: inline-flex; align-items: center; }
           .media-toggle-btn {
-              background: rgba(255, 255, 255, 0.05);
-              border: 1px solid rgba(255, 255, 255, 0.1);
-              border-radius: 50%;
-              width: 32px;
-              height: 32px;
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              cursor: pointer;
+              background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 50%;
+              width: 32px; height: 32px; display: flex; justify-content: center; align-items: center; cursor: pointer;
               transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
           }
+          .media-toggle-btn:hover { background: rgba(255, 255, 255, 0.15); transform: translateY(-2px) scale(1.02); }
+          .media-toggle-btn.mic-active { background: rgba(56, 189, 248, 0.15); border-color: rgba(56, 189, 248, 0.4); box-shadow: 0 0 15px rgba(56, 189, 248, 0.3); }
+          .media-toggle-btn.audio-active { background: rgba(34, 197, 94, 0.15); border-color: rgba(34, 197, 94, 0.4); box-shadow: 0 0 15px rgba(34, 197, 94, 0.3); }
 
-          .media-toggle-btn:hover {
-              background: rgba(255, 255, 255, 0.15);
-              transform: translateY(-2px) scale(1.02);
-          }
-
-          /* Glowing Effects for Active States */
-          .media-toggle-btn.mic-active {
-              background: rgba(56, 189, 248, 0.15);
-              border-color: rgba(56, 189, 248, 0.4);
-              box-shadow: 0 0 15px rgba(56, 189, 248, 0.3);
-          }
-
-          .media-toggle-btn.audio-active {
-              background: rgba(34, 197, 94, 0.15);
-              border-color: rgba(34, 197, 94, 0.4);
-              box-shadow: 0 0 15px rgba(34, 197, 94, 0.3);
-          }
-
-          /* Upward Tooltip for Bottom Left placement */
           .custom-tooltip-up {
-              visibility: hidden;
-              opacity: 0;
-              background-color: #1e293b;
-              color: #f8fafc;
-              border: 1px solid #334155;
-              text-align: center;
-              border-radius: 6px;
-              padding: 6px 12px;
-              position: absolute;
-              z-index: 100;
-              bottom: 140%; 
-              left: 50%; 
-              transform: translateX(-50%) translateY(8px);
-              font-size: 11px;
-              white-space: nowrap;
-              font-weight: 600;
-              letter-spacing: 0.5px;
-              transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+              visibility: hidden; opacity: 0; background-color: #1e293b; color: #f8fafc; border: 1px solid #334155;
+              text-align: center; border-radius: 6px; padding: 6px 12px; position: absolute; z-index: 100;
+              bottom: 140%; left: 50%; transform: translateX(-50%) translateY(8px); font-size: 11px; white-space: nowrap;
+              font-weight: 600; letter-spacing: 0.5px; transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
               box-shadow: 0 -4px 12px rgba(0,0,0,0.5);
           }
-
-          .custom-tooltip-up::after {
-              content: "";
-              position: absolute;
-              top: 100%;
-              left: 50%;
-              transform: translateX(-50%);
-              border-width: 5px;
-              border-style: solid;
-              border-color: #1e293b transparent transparent transparent;
-          }
-
-          .media-btn-container:hover .custom-tooltip-up {
-              visibility: visible;
-              opacity: 1;
-              transform: translateX(-50%) translateY(0);
-          }
-
+          .custom-tooltip-up::after { content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border-width: 5px; border-style: solid; border-color: #1e293b transparent transparent transparent; }
+          .media-btn-container:hover .custom-tooltip-up { visibility: visible; opacity: 1; transform: translateX(-50%) translateY(0); }
       `}</style>
 
       {/* LEFT PANEL: Camera Feed & Overlays */}
@@ -727,6 +602,31 @@ function VisionDashboard({ onNavigate }) {
               <h1 style={{ margin: 0, color: '#fff', fontSize: '12px', fontWeight: '700', letterSpacing: '1.5px', textTransform: 'uppercase' }}>
                   {currentInstruction}
               </h1>
+          </div>
+        )}
+
+        {/* NEW: Siri-style Active Listening HUD */}
+        {isAwake && (
+          <div style={{ 
+              position: 'absolute', 
+              top: '40px', 
+              left: '50%', 
+              transform: 'translateX(-50%)', 
+              backgroundColor: 'rgba(56, 189, 248, 0.15)', 
+              border: '1px solid rgba(56, 189, 248, 0.4)',
+              padding: '12px 32px', 
+              borderRadius: '30px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '12px', 
+              zIndex: 60,
+              boxShadow: '0 0 20px rgba(56, 189, 248, 0.4)',
+              animation: 'subtleBreathe 2s infinite ease-in-out'
+          }}>
+              <Mic size={18} color="#38bdf8" style={{ animation: 'pulseHeartbeat 1.5s infinite' }}/>
+              <span style={{ fontWeight: '800', fontSize: '14px', letterSpacing: '1px', color: '#f8fafc', textTransform: 'uppercase' }}>
+                Listening...
+              </span>
           </div>
         )}
 
