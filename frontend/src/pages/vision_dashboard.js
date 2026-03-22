@@ -5,7 +5,8 @@ const SYSTEM_MODES = {
   NORMAL: { id: 'NORMAL', label: 'Normal Mode', color: 'transparent' },
   NAVIGATION: { id: 'NAVIGATION', label: 'Navigation Mode', color: '#22c55e' },
   OCR: { id: 'OCR', label: 'OCR Text Mode', color: '#f59e0b' },                
-  TOOL: { id: 'TOOL', label: 'Tool Recognition', color: '#38bdf8' }
+  TOOL: { id: 'TOOL', label: 'Tool Recognition', color: '#38bdf8' },
+  GUIDANCE: { id: 'GUIDANCE', label: 'Tool Guidance Active', color: '#8b5cf6' }
 };
 
 function VisionDashboard({ onNavigate }) {
@@ -55,6 +56,7 @@ function VisionDashboard({ onNavigate }) {
   const wakeUpSystem = () => {
     setIsAwake(true);
     isAwakeRef.current = true;
+    sendCommand({ command: "DASHBOARD_WAKE", state: true }); // Tell server to shush
     speakInstruction("I'm listening.", true); 
     resetSleepTimer();
   };
@@ -62,6 +64,7 @@ function VisionDashboard({ onNavigate }) {
   const goToSleep = () => {
     setIsAwake(false);
     isAwakeRef.current = false;
+    sendCommand({ command: "DASHBOARD_WAKE", state: false }); // Tell server to resume
     if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
   };
 
@@ -82,18 +85,13 @@ function VisionDashboard({ onNavigate }) {
       recognition.interimResults = false;
 
       recognition.onresult = (event) => {
-        // Guard: Do not listen if the system is currently speaking (Prevents echo loops)
-        if (window.speechSynthesis.speaking) return;
-
         const transcript = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
         
-        // ==========================================
-        // NEW: WAKE WORD DETECTION LOGIC
-        // ==========================================
+        // WAKE WORD DETECTION LOGIC
         if (!isAwakeRef.current) {
-           // If asleep, ONLY listen for the magic words
            if (transcript.includes("hey glasses") || transcript.includes("wake up") || transcript.includes("okay glasses")) {
-               wakeUpSystem();
+            window.speechSynthesis.cancel();   
+            wakeUpSystem();
            } else {
                // Silently ignore all other background conversation
                console.log("Ignored background speech:", transcript);
@@ -108,10 +106,22 @@ function VisionDashboard({ onNavigate }) {
           sendCommand({ command: "FULL_OCR" });
           goToSleep();
         } 
-        else if (transcript.includes("scan tool") || transcript.includes("find tool")) {
-          sendCommand({ command: "TOOLS_SCAN" });
+        else if (transcript.includes("search for") || transcript.includes("find")) {
+          // Extract everything after "tool"
+          const match = transcript.match(/(?:search for|find )\s+(.+)/);
+          if (match && match[1]) {
+            const requestedTool = match[1].trim();
+            sendCommand({ command: "SEARCH_TOOL", target_tool: requestedTool });
+          } else {
+             speakInstruction("Please specify which tool to find.");
+          }
           goToSleep();
         } 
+        else if (transcript.includes("stop searching") || transcript.includes("cancel searching")) {
+          window.speechSynthesis.cancel();
+          sendCommand({ command: "SEARCH_STOP" });
+          goToSleep();
+        }
         else if (transcript.includes("stop navigation") || transcript.includes("cancel navigation")) {
           sendCommand({ command: "NAV_STOP" });
           goToSleep();
@@ -230,11 +240,20 @@ function VisionDashboard({ onNavigate }) {
               setActiveMode(SYSTEM_MODES.NORMAL);
             }
             
-            setLogs(prev => [...prev, { 
-              time: new Date().toLocaleTimeString(), 
-              text: data.log, 
-              type: isHazard ? "alert" : isWarning ? "error" : "normal" 
-            }]);
+            setLogs(prev => {
+              // If the exact same text was logged within the last 2 seconds, ignore it.
+              const lastLog = prev.length > 0 ? prev[prev.length - 1] : null;
+              if (lastLog && lastLog.text === data.log && (Date.now() - lastLog.ts < 2000)) {
+                  return prev; 
+              }
+              
+              return [...prev, { 
+                time: new Date().toLocaleTimeString(), 
+                text: data.log, 
+                type: isHazard ? "alert" : isWarning ? "error" : "normal",
+                ts: Date.now() // Internal timestamp for the deduplication check
+              }];
+            });
           }
 
           if (data.instruction) {
@@ -286,7 +305,13 @@ function VisionDashboard({ onNavigate }) {
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (transientModeResetRef.current) clearTimeout(transientModeResetRef.current);
       try {
-        wsRef.current?.close();
+        if (wsRef.current) {
+          // Forcefully detach listeners so ghost connections cannot mutate state
+          wsRef.current.onmessage = null; 
+          wsRef.current.onclose = null;
+          wsRef.current.onerror = null;
+          wsRef.current.close();
+        }
       } catch (e) {}
     };
   }, []);
@@ -609,7 +634,7 @@ function VisionDashboard({ onNavigate }) {
         {isAwake && (
           <div style={{ 
               position: 'absolute', 
-              top: '40px', 
+              top: '80px', 
               left: '50%', 
               transform: 'translateX(-50%)', 
               backgroundColor: 'rgba(56, 189, 248, 0.15)', 
