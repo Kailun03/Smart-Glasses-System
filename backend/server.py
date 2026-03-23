@@ -34,24 +34,51 @@ is_currently_safe = True
 edge_device_ws = None
 dashboard_connections = []
 
-active_mode = "NORMAL"  # NORMAL | NAVIGATION | OCR | TOOL
+# NORMAL | NAVIGATION | OCR | TOOL
+active_mode = "NORMAL"  
 
 nav_session = gps.NavigationSession()
 last_nav_push = 0.0
 DEFAULT_START_LOCATION = (5.41, 100.33)
 current_location = DEFAULT_START_LOCATION
 
-target_tool_name = None # Stores the tool we are currently looking for
-dashboard_awake = False # Tracks if the UI is actively listening for a command
+# Stores the tool we are currently looking for
+target_tool_name = None 
+# Tracks if the UI is actively listening for a command
+dashboard_awake = False 
 
 # Cooldown trackers for guidance so it doesn't spam the audio
 last_guidance_time = 0.0
 last_guidance_text = ""
 
-raw_frame_buffer = None # The mailbox between the fast WebSocket and the slow AI
-frame_pending = False # True when ESP32 sent a frame that is not processed into latest_frame yet
+# The mailbox between the fast WebSocket and the slow AI
+raw_frame_buffer = None 
+# True when ESP32 sent a frame that is not processed into latest_frame yet
+frame_pending = False 
 
-global_ai_task = None # Ensures we never spawn duplicate AI threads
+# Ensures we never spawn duplicate AI threads
+global_ai_task = None 
+
+# Traffic Controller to prevent FastAPI from crashing on simultaneous writes
+edge_ws_lock = asyncio.Lock()
+
+async def safe_ws_send_text(text: str):
+    """Safely queues text messages so they never collide with audio streams."""
+    if edge_device_ws:
+        async with edge_ws_lock:
+            try:
+                await edge_device_ws.send_text(text)
+            except Exception as e:
+                pass
+
+async def safe_ws_send_bytes(data: bytes):
+    """Safely queues binary data."""
+    if edge_device_ws:
+        async with edge_ws_lock:
+            try:
+                await edge_device_ws.send_bytes(data)
+            except Exception as e:
+                pass
 
 
 async def _broadcast(payload: Dict[str, Any]) -> None:
@@ -91,26 +118,37 @@ def generate_speech_pcm(text: str) -> Optional[bytes]:
         print(f"[ERROR] Failed to generate TTS audio: {e}")
         return None
 
+# Ensures voices don't overlap and spam the speaker
+audio_playing_lock = asyncio.Lock()
+
+async def _process_and_stream_audio(text: str):
+    """The internal background task that actually handles the heavy TTS generation."""
+    async with audio_playing_lock:
+        pcm_bytes = await asyncio.to_thread(generate_speech_pcm, text)
+        if pcm_bytes:
+            try:
+                CHUNK_SIZE = 1024
+                for i in range(0, len(pcm_bytes), CHUNK_SIZE):
+                    chunk = pcm_bytes[i : i + CHUNK_SIZE]
+                    await safe_ws_send_bytes(chunk)
+                    await asyncio.sleep(0.024)
+            except Exception as e:
+                print(f"[WARNING] Audio stream interrupted: {e}")
+
 async def stream_audio_to_glasses(text: str):
-    """Streams the generated binary audio down the WebSocket to the ESP32."""
+    """
+    Fire-and-forget audio streamer. 
+    It returns INSTANTLY so the AI worker never freezes!
+    """
     if edge_device_ws is None:
         return
-    
-    # Run the heavy TTS generation in a background thread so video doesn't lag
-    pcm_bytes = await asyncio.to_thread(generate_speech_pcm, text)
-    
-    if pcm_bytes:
-        try:
-            # Send the raw audio binary data to the ESP32
-            CHUNK_SIZE = 1024
-
-            for i in range(0, len(pcm_bytes), CHUNK_SIZE):
-                chunk = pcm_bytes[i : i + CHUNK_SIZE]
-                await edge_device_ws.send_bytes(chunk)
-                await asyncio.sleep(0.02)
-
-        except Exception as e:
-            print(f"[ERROR] Audio Stream Failed: {e}")
+        
+    # If the system is currently talking, drop the new request to prevent audio traffic jams
+    if audio_playing_lock.locked():
+        return
+        
+    # Spawn the heavy lifting in the background and instantly return to analyzing video
+    asyncio.create_task(_process_and_stream_audio(text))
 
 
 @app.get("/video_feed")
@@ -182,18 +220,15 @@ async def background_ai_worker():
                     action_command, log_message, audio_instruction = alerts.generate_alerts(hazards)
 
                     if "HAZARD" in log_message:
-                        if edge_device_ws:
-                            try: await edge_device_ws.send_text(action_command)
-                            except: pass
+                        # Route alerts through the traffic controller
+                        await safe_ws_send_text(action_command)
                         await stream_audio_to_glasses(audio_instruction)
                         await _broadcast({"type": "log", "log": log_message, "instruction": audio_instruction, "mode": active_mode})
-                        is_currently_safe = False 
+                        is_currently_safe = False
 
                     else:
                         if not is_currently_safe:
-                            if edge_device_ws:
-                                try: await edge_device_ws.send_text(action_command)
-                                except: pass
+                            await safe_ws_send_text(action_command)
                             await stream_audio_to_glasses(audio_instruction)
                             await _broadcast({"type": "log", "log": log_message, "instruction": audio_instruction, "mode": active_mode})
                             is_currently_safe = True
@@ -272,7 +307,7 @@ async def background_ai_worker():
             import traceback
             traceback.print_exc()
             
-        await asyncio.sleep(0.001)
+        await asyncio.sleep(0.005)
 
 
 @app.websocket("/ws")

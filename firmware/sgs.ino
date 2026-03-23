@@ -13,7 +13,7 @@ const char* password = "Kailun2003";
 // ==========================================
 // 2. WebSocket Configuration
 // ==========================================
-const char* ws_host = "seasons-runs-again-david.trycloudflare.com";
+const char* ws_host = "handled-pts-vary-hiv.trycloudflare.com";
 const int ws_port = 443; 
 const char* ws_url = "/ws";
 
@@ -50,8 +50,8 @@ WebSocketsClient webSocket;
 // ==========================================
 // 5. GPS PIN DEFINITIONS
 // ==========================================
-#define GPS_RX_PIN 43
-#define GPS_TX_PIN 44
+#define GPS_RX_PIN 39
+#define GPS_TX_PIN 38
 
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(1); 
@@ -67,7 +67,7 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       break;
     case WStype_BIN:
       size_t bytes_written;
-      i2s_write(I2S_NUM_0, payload, length, &bytes_written, pdMS_TO_TICKS(100));
+      i2s_write(I2S_NUM_0, payload, length, &bytes_written, pdMS_TO_TICKS(15));
       break;
   }
 }
@@ -81,8 +81,8 @@ void initSpeaker() {
     .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
     .communication_format = I2S_COMM_FORMAT_STAND_I2S,
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-    .dma_buf_count = 4,
-    .dma_buf_len = 512,
+    .dma_buf_count = 8,
+    .dma_buf_len = 1024,
     .use_apll = false,
     .tx_desc_auto_clear = true,
     .fixed_mclk = 0
@@ -203,11 +203,33 @@ void loop() {
 
   // Send GPS Data every 2 seconds
   if (current_time - last_gps_time > 2000) {
-      if (gps.location.isValid()) {
+      
+      // We use static variables to remember the count from 2 seconds ago
+      static uint32_t last_chars_processed = 0;
+      uint32_t current_chars = gps.charsProcessed();
+
+      // DIAGNOSTIC 1: Is the wire actually plugged in right now?
+      if (current_chars == last_chars_processed) {
+          // Serial.println("[GPS CRITICAL] WIRE DISCONNECTED! No new data flowing to ESP32.");
+      } 
+      // DIAGNOSTIC 2: The wire is plugged in, but is it backward?
+      else if (gps.passedChecksum() == 0) {
+          // Serial.println("[GPS ERROR] Receiving garbage noise. Swap TX and RX wires!");
+      }
+      // DIAGNOSTIC 3: Wiring is perfect, waiting on space.
+      else if (!gps.location.isValid()) {
+          // Serial.print("[GPS STATUS] Wiring PERFECT. Searching the sky... Satellites: ");
+          // Serial.println(gps.satellites.value());
+      } 
+      // DIAGNOSTIC 4: Success!
+      else {
           char jsonPayload[100];
           snprintf(jsonPayload, sizeof(jsonPayload), "{\"type\":\"gps\", \"lat\":%.6f, \"lon\":%.6f}", gps.location.lat(), gps.location.lng());
           webSocket.sendTXT(jsonPayload);
+          // Serial.println("[GPS SUCCESS] Coordinates sent to server.");
       }
+      
+      last_chars_processed = current_chars;
       last_gps_time = current_time;
   }
 
