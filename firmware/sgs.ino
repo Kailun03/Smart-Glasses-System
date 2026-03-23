@@ -67,7 +67,7 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       break;
     case WStype_BIN:
       size_t bytes_written;
-      i2s_write(I2S_NUM_0, payload, length, &bytes_written, pdMS_TO_TICKS(15));
+      i2s_write(I2S_NUM_0, payload, length, &bytes_written, pdMS_TO_TICKS(10));
       break;
   }
 }
@@ -171,7 +171,7 @@ void setup() {
   webSocket.beginSSL(ws_host, ws_port, ws_url);
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(5000); 
-  webSocket.enableHeartbeat(15000, 3000, 2);
+  webSocket.enableHeartbeat(15000, 5000, 3);
 }
 
 // ----------------------------------------------------

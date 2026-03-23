@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import math
 from typing import Any, Dict, List, Tuple
 import cv2
 import numpy as np
@@ -28,10 +29,31 @@ mp_drawing = mp.solutions.drawing_utils
 
 hands_tracker = mp_hands.Hands(
     static_image_mode=False,
-    max_num_hands=1, # Only track one hand for guidance
+    max_num_hands=1, 
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5
 )
+
+def draw_modern_hud_box(img, x1, y1, x2, y2, color, label):
+    """Draws a sleek, modern camera-style HUD bounding box."""
+    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+    cv2.rectangle(img, (x1, y1), (x2, y2), color, 1, cv2.LINE_AA)
+    
+    length = 20
+    thickness = 4
+    cv2.line(img, (x1, y1), (x1 + length, y1), color, thickness, cv2.LINE_AA)
+    cv2.line(img, (x1, y1), (x1, y1 + length), color, thickness, cv2.LINE_AA)
+    cv2.line(img, (x2, y1), (x2 - length, y1), color, thickness, cv2.LINE_AA)
+    cv2.line(img, (x2, y1), (x2, y1 + length), color, thickness, cv2.LINE_AA)
+    cv2.line(img, (x1, y2), (x1 + length, y2), color, thickness, cv2.LINE_AA)
+    cv2.line(img, (x1, y2), (x1, y2 - length), color, thickness, cv2.LINE_AA)
+    cv2.line(img, (x2, y2), (x2 - length, y2), color, thickness, cv2.LINE_AA)
+    cv2.line(img, (x2, y2), (x2, y2 - length), color, thickness, cv2.LINE_AA)
+
+    (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+    cv2.rectangle(img, (x1, y1 - 24), (x1 + text_w + 16, y1), color, -1)
+    text_color = (0, 0, 0) if sum(color) > 400 else (255, 255, 255)
+    cv2.putText(img, label, (x1 + 8, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, text_color, 1, cv2.LINE_AA)
 
 def analyze_tools(
     img: np.ndarray,
@@ -39,13 +61,9 @@ def analyze_tools(
     conf: float = 0.35,
     allowed_classes: List[str] | None = None,
 ) -> Tuple[np.ndarray, List[Dict[str, Any]], str]:
-    """
-    Returns: (annotated_image, detected_tools_list, guidance_instruction_string)
-    """
     if img is None or _model is None:
         return img, [], ""
 
-    # 1. Run YOLOv8 Tool Detection
     results = _model(img, stream=False, verbose=False, conf=conf)
     detected: List[Dict[str, Any]] = []
     
@@ -66,64 +84,73 @@ def analyze_tools(
             
             detected.append({"name": name, "bbox": [float(x1), float(y1), float(x2), float(y2)]})
 
-            # Highlight the tool
-            color = (255, 120, 50) 
-            # If this is the tool we are searching for, highlight it brightly!
+            color = (255, 160, 50) # Sleek Blue 
+            
             if target_tool and target_tool.lower() in name:
                 target_box = (center_x, center_y, x1, y1, x2, y2)
-                color = (0, 255, 255) # Yellow for target
+                color = (0, 255, 255) # Electric Yellow for target
 
-            cv2.rectangle(annotated_img, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
-            cv2.putText(annotated_img, name.upper(), (int(x1), max(int(y1) - 8, 0)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            draw_modern_hud_box(annotated_img, x1, y1, x2, y2, color, name.upper())
 
-    # If we are NOT in target guidance mode, just return the tools
     if not target_tool:
         return annotated_img, detected, ""
 
-    # If target is requested but not found
     if target_tool and target_box is None:
         return annotated_img, detected, f"{target_tool} not in view. Scan the area."
 
-    # 2. Target found! Run MediaPipe Hand Tracking
     rgb_img = cv2.cvtColor(annotated_img, cv2.COLOR_BGR2RGB)
     hand_results = hands_tracker.process(rgb_img)
 
     if not hand_results.multi_hand_landmarks:
         return annotated_img, detected, "Tool found. Show your hand to begin guidance."
 
-    # 3. Calculate Guidance Vector (Hand to Tool)
     h, w, c = annotated_img.shape
     hand_landmarks = hand_results.multi_hand_landmarks[0]
     
-    # Draw hand skeleton for visual feedback on dashboard
-    mp_drawing.draw_landmarks(annotated_img, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+    # 1. Custom Hand Skeleton (Neon Cyan & White)
+    custom_node_spec = mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=1, circle_radius=2)
+    custom_line_spec = mp_drawing.DrawingSpec(color=(255, 230, 0), thickness=2) # Cyan (BGR)
+    
+    mp_drawing.draw_landmarks(
+        annotated_img, 
+        hand_landmarks, 
+        mp_hands.HAND_CONNECTIONS,
+        custom_node_spec,
+        custom_line_spec
+    )
 
-    # Use the Index Finger Tip (Landmark 8) as the grabbing point
+    # 2. Extract key finger landmarks
     index_finger = hand_landmarks.landmark[8]
+    thumb_finger = hand_landmarks.landmark[4]
+    
     hand_x = int(index_finger.x * w)
     hand_y = int(index_finger.y * h)
-    
-    cv2.circle(annotated_img, (hand_x, hand_y), 10, (0, 255, 0), -1) # Draw green dot on finger
-
-    # Unpack target tool coordinates
     t_cx, t_cy, t_x1, t_y1, t_x2, t_y2 = target_box
 
-    # Draw a line from the hand to the tool
-    cv2.line(annotated_img, (hand_x, hand_y), (t_cx, t_cy), (0, 255, 0), 2)
+    # 3. Draw sleek "Targeting Reticles" and a fine guidance line
+    cv2.circle(annotated_img, (hand_x, hand_y), 8, (0, 255, 255), 2, cv2.LINE_AA) # Hollow outer ring on finger
+    cv2.circle(annotated_img, (hand_x, hand_y), 3, (0, 255, 255), -1, cv2.LINE_AA) # Solid inner dot
+    
+    cv2.circle(annotated_img, (t_cx, t_cy), 8, (255, 0, 255), 2, cv2.LINE_AA) # Hollow outer ring on tool center
+    cv2.circle(annotated_img, (t_cx, t_cy), 3, (255, 0, 255), -1, cv2.LINE_AA) # Solid inner dot
+    
+    # Fine connecting guidance line
+    cv2.line(annotated_img, (hand_x, hand_y), (t_cx, t_cy), (0, 255, 255), 1, cv2.LINE_AA)
 
-    # Check if hand is INSIDE the tool bounding box
+    pinch_dist = math.hypot(index_finger.x - thumb_finger.x, index_finger.y - thumb_finger.y)
+
     if t_x1 <= hand_x <= t_x2 and t_y1 <= hand_y <= t_y2:
-        return annotated_img, detected, "Hand is on the tool. Grab it now."
+        if pinch_dist < 0.05:
+            return annotated_img, detected, "Tool secured. Grab it now."
+        else:
+            return annotated_img, detected, "Hand is over the tool. Pinch fingers to grab."
 
-    # Calculate directions
     dx = t_cx - hand_x
     dy = t_cy - hand_y
     
     horizontal_dir = "right" if dx > 0 else "left"
-    vertical_dir = "down" if dy > 0 else "up" # Y-axis is inverted in images
+    vertical_dir = "down" if dy > 0 else "up" 
     
-    # Threshold to ignore tiny movements (50 pixels)
     instructions = []
     if abs(dx) > 50: instructions.append(horizontal_dir)
     if abs(dy) > 50: instructions.append(vertical_dir)
@@ -131,6 +158,6 @@ def analyze_tools(
     if instructions:
         guidance_text = "Move hand " + " and ".join(instructions)
     else:
-        guidance_text = "Move forward to grab."
+        guidance_text = "Move forward."
 
     return annotated_img, detected, guidance_text

@@ -61,24 +61,19 @@ global_ai_task = None
 
 # Traffic Controller to prevent FastAPI from crashing on simultaneous writes
 edge_ws_lock = asyncio.Lock()
+audio_playing_lock = asyncio.Lock()
 
 async def safe_ws_send_text(text: str):
-    """Safely queues text messages so they never collide with audio streams."""
     if edge_device_ws:
         async with edge_ws_lock:
-            try:
-                await edge_device_ws.send_text(text)
-            except Exception as e:
-                pass
+            try: await edge_device_ws.send_text(text)
+            except Exception: pass
 
 async def safe_ws_send_bytes(data: bytes):
-    """Safely queues binary data."""
     if edge_device_ws:
         async with edge_ws_lock:
-            try:
-                await edge_device_ws.send_bytes(data)
-            except Exception as e:
-                pass
+            try: await edge_device_ws.send_bytes(data)
+            except Exception: pass
 
 
 async def _broadcast(payload: Dict[str, Any]) -> None:
@@ -118,36 +113,27 @@ def generate_speech_pcm(text: str) -> Optional[bytes]:
         print(f"[ERROR] Failed to generate TTS audio: {e}")
         return None
 
-# Ensures voices don't overlap and spam the speaker
-audio_playing_lock = asyncio.Lock()
 
 async def _process_and_stream_audio(text: str):
-    """The internal background task that actually handles the heavy TTS generation."""
+    if not text: return
     async with audio_playing_lock:
         pcm_bytes = await asyncio.to_thread(generate_speech_pcm, text)
         if pcm_bytes:
             try:
-                CHUNK_SIZE = 1024
+                CHUNK_SIZE = 4096 
+                
                 for i in range(0, len(pcm_bytes), CHUNK_SIZE):
                     chunk = pcm_bytes[i : i + CHUNK_SIZE]
                     await safe_ws_send_bytes(chunk)
-                    await asyncio.sleep(0.024)
+                    await asyncio.sleep(0.1) 
             except Exception as e:
                 print(f"[WARNING] Audio stream interrupted: {e}")
 
 async def stream_audio_to_glasses(text: str):
-    """
-    Fire-and-forget audio streamer. 
-    It returns INSTANTLY so the AI worker never freezes!
-    """
-    if edge_device_ws is None:
+    if edge_device_ws is None or not text:
         return
-        
-    # If the system is currently talking, drop the new request to prevent audio traffic jams
     if audio_playing_lock.locked():
-        return
-        
-    # Spawn the heavy lifting in the background and instantly return to analyzing video
+        return # Skip this audio if we are already speaking
     asyncio.create_task(_process_and_stream_audio(text))
 
 
@@ -219,19 +205,22 @@ async def background_ai_worker():
                 if status == "PROCESSED":
                     action_command, log_message, audio_instruction = alerts.generate_alerts(hazards)
 
-                    if "HAZARD" in log_message:
-                        # Route alerts through the traffic controller
+                    # Strict checking to prevent the "Toggle Storm"
+                    if log_message.startswith("HAZARD"):
                         await safe_ws_send_text(action_command)
                         await stream_audio_to_glasses(audio_instruction)
                         await _broadcast({"type": "log", "log": log_message, "instruction": audio_instruction, "mode": active_mode})
-                        is_currently_safe = False
+                        is_currently_safe = False 
 
-                    else:
+                    elif log_message.startswith("SAFE"):
                         if not is_currently_safe:
                             await safe_ws_send_text(action_command)
                             await stream_audio_to_glasses(audio_instruction)
                             await _broadcast({"type": "log", "log": log_message, "instruction": audio_instruction, "mode": active_mode})
                             is_currently_safe = True
+                            
+                    elif log_message.startswith("INFO"):
+                        pass # Ignore cooldowns entirely
 
                 if nav_session.active and (time.time() - last_nav_push) > 3.0:
                     instr = nav_session.next_instruction()
@@ -262,7 +251,7 @@ async def background_ai_worker():
                             
                     last_ocr_time = current_time
 
-                if active_mode in ["TOOL", "GUIDANCE"]:
+                if active_mode == "GUIDANCE":
                     img, tools, guidance_instruction = await asyncio.to_thread(
                         recognize_tool.analyze_tools, processed_img.copy(), target_tool_name
                     )
@@ -301,6 +290,13 @@ async def background_ai_worker():
                             if "Grab it now" in guidance_instruction:
                                 active_mode = "NORMAL"
                                 target_tool_name = None
+                                
+                                await _broadcast({
+                                    "type": "status",
+                                    "device_connected": True,
+                                    "mode": active_mode,
+                                    "log": "Tool secured. Guidance mode deactivated."
+                                })
                             
         except Exception as e:
             print(f"\n[CRITICAL ERROR] AI Worker Crashed: {e}")
@@ -437,18 +433,41 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
         if latest_frame is None:
             await websocket.send_text(json.dumps({"type": "log", "log": "TOOLS: No frame available yet.", "mode": active_mode}))
             return
+            
         msg = "Scanning tools..."
         await stream_audio_to_glasses(msg)
         await _broadcast({"type": "log", "log": msg, "instruction": msg, "mode": active_mode})
-        return
+        
+        # 1. Run the tool recognition model in a background thread
+        # target_tool is None because we want to detect ALL tools in view
+        annotated_img, tools, guidance_text = await asyncio.to_thread(
+            recognize_tool.analyze_tools, latest_frame.copy(), None
+        )
+        
+        # 2. Update the video feed with the newly drawn HUD bounding boxes
+        global latest_jpeg_bytes, latest_frame_seq
+        success, encoded_img = cv2.imencode('.jpg', annotated_img)
+        if success:
+            latest_jpeg_bytes = encoded_img.tobytes()
+            latest_frame_seq += 1
+
+        # 3. Handle the results
         if not tools:
             await stream_audio_to_glasses("No tools detected.")
-            await _broadcast({"type": "log", "log": "TOOLS: No tools detected (or model not configured).", "instruction": "No tools detected.", "mode": active_mode})
-            return
-        names = ", ".join(sorted({t["name"] for t in tools}))
-        instruction_str = f"{names} is detected"
-        await stream_audio_to_glasses(instruction_str)
-        await _broadcast({"type": "log", "log": f"TOOLS DETECTED: {names}", "instruction": f"Detected: {names}", "mode": active_mode, "tools": tools})
+            await _broadcast({"type": "log", "log": "TOOLS: No tools detected (or model not configured).", "instruction": "No tools detected.", "mode": "NORMAL"})
+        else:
+            names = ", ".join(sorted({t["name"] for t in tools}))
+            instruction_str = f"Detected: {names}"
+            await stream_audio_to_glasses(instruction_str)
+            await _broadcast({
+                "type": "log", 
+                "log": f"TOOLS DETECTED: {names}", 
+                "instruction": f"Detected: {names}", 
+                "mode": "NORMAL", 
+                "tools": tools
+            })
+
+        active_mode = "NORMAL"
         return
 
     if command == "NAV_START":
