@@ -14,6 +14,7 @@ import edge_tts
 from pydub import AudioSegment
 import wave
 import os
+import vosk
 
 # import four core system modules
 import hazard_detection as detect_hazard
@@ -61,6 +62,17 @@ audio_playing_lock = asyncio.Lock()
 
 # Zero-Latency Event Trigger for ultra-smooth video
 new_frame_event = asyncio.Event()
+
+# Load the Offline STT Model
+print("[STT] Loading Vosk Voice Model...")
+try:
+    stt_model = vosk.Model("vosk_model")
+    stt_recognizer = vosk.KaldiRecognizer(stt_model, 16000)
+    print("[STT] Voice Model Loaded Successfully!")
+except Exception as e:
+    print("[STT] WARNING: 'vosk_model' folder not found. Voice commands disabled.")
+    stt_model = None
+    stt_recognizer = None
 
 def _decode_video_frame(raw_bytes: bytes) -> Optional[np.ndarray]:
     np_arr = np.frombuffer(raw_bytes, np.uint8)
@@ -189,6 +201,31 @@ async def _background_safety_ocr(clean_frame: np.ndarray, current_mode: str):
             await _broadcast(payload)
     except Exception as e:
         print(f"[OCR ERROR] {e}")
+
+
+class DummyWS:
+    """A fake WebSocket to satisfy the _handle_dashboard_command signature."""
+    async def send_text(self, text): pass
+
+dummy_ws = DummyWS()
+
+async def process_voice_command(spoken_text: str):
+    """Translates spoken English into system commands."""
+    text = spoken_text.lower()
+    payload = None
+    
+    if "scan" in text and "text" in text:
+        payload = {"type": "command", "command": "FULL_OCR"}
+    elif "scan" in text and "tool" in text:
+        payload = {"type": "command", "command": "TOOLS_SCAN"}
+    elif "stop" in text:
+        payload = {"type": "command", "command": "SEARCH_STOP"}
+        
+    if payload:
+        print(f"[VOICE COMMAND TRIGGERED] Executing: {payload['command']}")
+        await stream_audio_to_glasses("Command acknowledged.")
+        # Re-use your perfectly working dashboard logic!
+        await _handle_dashboard_command(dummy_ws, payload)
 
 
 @app.get("/video_feed")
@@ -422,6 +459,37 @@ async def edge_endpoint(websocket: WebSocket):
             print(f"[INFO] Ghost connection threw an error but was safely ignored.")
 
 
+def _process_audio_chunk(data: bytes):
+    """Runs the heavy STT engine safely without freezing the server."""
+    if stt_recognizer and stt_recognizer.AcceptWaveform(data):
+        return json.loads(stt_recognizer.Result())
+    return None
+
+@app.websocket("/ws/audio")
+async def audio_endpoint(websocket: WebSocket):
+    """Dedicated uplink for the hardware microphone."""
+    await websocket.accept()
+    if stt_model is None:
+        await websocket.close()
+        return
+        
+    print("[SUCCESS] Microphone Uplink Connected!")
+    try:
+        while True:
+            data = await websocket.receive_bytes()
+            # Process audio in a thread so video streaming stays smooth
+            result = await asyncio.to_thread(_process_audio_chunk, data)
+            
+            if result:
+                text = result.get("text", "")
+                if text:
+                    print(f"[USER SAID]: {text}")
+                    await process_voice_command(text)
+                    
+    except WebSocketDisconnect:
+        print("[WARNING] Microphone Uplink Disconnected.")
+
+        
 async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) -> None:
     global latest_frame, active_mode, nav_session, current_location, target_tool_name
 
