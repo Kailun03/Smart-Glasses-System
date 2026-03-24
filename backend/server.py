@@ -193,6 +193,8 @@ async def background_ai_worker():
             if raw_frame_buffer is not None:
                 img_to_process = raw_frame_buffer
                 raw_frame_buffer = None 
+                
+                clean_ocr_frame = img_to_process.copy()
 
                 processed_img, status, hazards = await asyncio.to_thread(detect_hazard.analyze_frame, img_to_process)
                 latest_frame = processed_img
@@ -230,24 +232,30 @@ async def background_ai_worker():
                         await _broadcast({"type": "log", "log": f"NAVIGATION: {instr}", "instruction": instr, "mode": active_mode})
 
                 current_time = time.time()
-                if current_time - last_ocr_time > 5:
-                    safety_keywords, snippet = await asyncio.to_thread(recognize_character.scan_safety_keywords, processed_img)
+                if current_time - last_ocr_time > 2:
+                    annotated_ocr_img, safety_keywords, snippet = await asyncio.to_thread(recognize_character.scan_safety_keywords, clean_ocr_frame)
                     
                     if safety_keywords:
-                        kw_str = ", ".join(safety_keywords).upper()
-                        instruction_str = f"Warning sign detected: {kw_str}"
-                        payload = {
-                            "type": "log",
-                            "log": f"WARNING SIGN DETECTED: {kw_str}",
-                            "instruction": instruction_str, 
-                            "mode": active_mode,
-                            "ocr_snippet": snippet[:160],
-                        }
-                        if edge_device_ws: 
-                            try: await edge_device_ws.send_text("ALERT: MOTOR_BOTH") 
-                            except: pass
-                        await stream_audio_to_glasses(instruction_str)
-                        await _broadcast(payload)
+                        latest_frame = annotated_ocr_img
+                        success, encoded_img = cv2.imencode('.jpg', latest_frame)
+                        if success:
+                            latest_jpeg_bytes = encoded_img.tobytes()
+                            latest_frame_seq += 1
+
+                            kw_str = ", ".join(safety_keywords).upper()
+                            instruction_str = f"Warning sign detected: {kw_str}"
+                            payload = {
+                                "type": "log",
+                                "log": f"WARNING SIGN DETECTED: {kw_str}",
+                                "instruction": instruction_str, 
+                                "mode": active_mode,
+                                "ocr_snippet": snippet[:160],
+                            }
+                            if edge_device_ws: 
+                                try: await edge_device_ws.send_text("ALERT: MOTOR_BOTH") 
+                                except: pass
+                            await stream_audio_to_glasses(instruction_str)
+                            await _broadcast(payload)
                             
                     last_ocr_time = current_time
 
@@ -412,7 +420,14 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
         if latest_frame is None:
             await websocket.send_text(json.dumps({"type": "log", "log": "OCR: No frame available yet.", "mode": active_mode}))
             return
-        text, kws = recognize_character.analyze_text(latest_frame.copy())
+        annotated_img, text, kws = await asyncio.to_thread(recognize_character.analyze_text, latest_frame.copy())
+        
+        global latest_jpeg_bytes, latest_frame_seq
+        success, encoded_img = cv2.imencode('.jpg', annotated_img)
+        if success:
+            latest_jpeg_bytes = encoded_img.tobytes()
+            latest_frame_seq += 1
+            
         if not text:
             await stream_audio_to_glasses("No readable text detected.")
             await websocket.send_text(json.dumps({"type": "log", "log": "OCR: No readable text detected.", "mode": active_mode, "instruction": "No readable text detected."}))
@@ -445,7 +460,6 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
         )
         
         # 2. Update the video feed with the newly drawn HUD bounding boxes
-        global latest_jpeg_bytes, latest_frame_seq
         success, encoded_img = cv2.imencode('.jpg', annotated_img)
         if success:
             latest_jpeg_bytes = encoded_img.tobytes()
@@ -457,12 +471,12 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
             await _broadcast({"type": "log", "log": "TOOLS: No tools detected (or model not configured).", "instruction": "No tools detected.", "mode": "NORMAL"})
         else:
             names = ", ".join(sorted({t["name"] for t in tools}))
-            instruction_str = f"Detected: {names}"
+            instruction_str = f"TOOLS DETECTED: {names}"
             await stream_audio_to_glasses(instruction_str)
             await _broadcast({
                 "type": "log", 
-                "log": f"TOOLS DETECTED: {names}", 
-                "instruction": f"Detected: {names}", 
+                "log": instruction_str, 
+                "instruction": instruction_str, 
                 "mode": "NORMAL", 
                 "tools": tools
             })
