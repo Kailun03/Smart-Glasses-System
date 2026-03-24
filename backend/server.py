@@ -42,26 +42,36 @@ last_nav_push = 0.0
 DEFAULT_START_LOCATION = (5.41, 100.33)
 current_location = DEFAULT_START_LOCATION
 
-# Stores the tool we are currently looking for
 target_tool_name = None 
-# Tracks if the UI is actively listening for a command
 dashboard_awake = False 
 
-# Cooldown trackers for guidance so it doesn't spam the audio
 last_guidance_time = 0.0
 last_guidance_text = ""
 
-# The mailbox between the fast WebSocket and the slow AI
 raw_frame_buffer = None 
-# True when ESP32 sent a frame that is not processed into latest_frame yet
 frame_pending = False 
 
-# Ensures we never spawn duplicate AI threads
 global_ai_task = None 
 
-# Traffic Controller to prevent FastAPI from crashing on simultaneous writes
 edge_ws_lock = asyncio.Lock()
 audio_playing_lock = asyncio.Lock()
+
+# Zero-Latency Event Trigger for ultra-smooth video
+new_frame_event = asyncio.Event()
+
+def _decode_video_frame(raw_bytes: bytes) -> Optional[np.ndarray]:
+    np_arr = np.frombuffer(raw_bytes, np.uint8)
+    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    if img is not None:
+        return cv2.flip(img, 1)
+    return None
+
+def _encode_video_frame(frame: np.ndarray) -> Optional[bytes]:
+    success, encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+    if success:
+        return encoded.tobytes()
+    return None
+
 
 async def safe_ws_send_text(text: str):
     if edge_device_ws:
@@ -86,25 +96,20 @@ async def _broadcast(payload: Dict[str, Any]) -> None:
         except:
             dead_connections.append(dash)
             
-    # Prevent memory leaks and duplicate routing by purging dead connections
     for dead in dead_connections:
         if dead in dashboard_connections:
             dashboard_connections.remove(dead)
 
 
 def generate_speech_pcm(text: str) -> Optional[bytes]:
-    """Converts text into raw 16-bit PCM binary audio data."""
     try:
         temp_filename = "temp_speech.wav"
-        # 1. Generate the spoken WAV file
         tts_engine.save_to_file(text, temp_filename)
         tts_engine.runAndWait()
         
-        # 2. Extract the raw binary audio frames (skipping the WAV header)
         with wave.open(temp_filename, 'rb') as wf:
             pcm_data = wf.readframes(wf.getnframes())
             
-        # 3. Clean up the temp file
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
             
@@ -121,7 +126,6 @@ async def _process_and_stream_audio(text: str):
         if pcm_bytes:
             try:
                 CHUNK_SIZE = 4096 
-                
                 for i in range(0, len(pcm_bytes), CHUNK_SIZE):
                     chunk = pcm_bytes[i : i + CHUNK_SIZE]
                     await safe_ws_send_bytes(chunk)
@@ -133,8 +137,41 @@ async def stream_audio_to_glasses(text: str):
     if edge_device_ws is None or not text:
         return
     if audio_playing_lock.locked():
-        return # Skip this audio if we are already speaking
+        return 
     asyncio.create_task(_process_and_stream_audio(text))
+
+# =========================================================================
+# NEW: Non-Blocking Background OCR Task
+# This prevents the 1-second video freeze every time the system reads text!
+# =========================================================================
+async def _background_safety_ocr(clean_frame: np.ndarray, current_mode: str):
+    try:
+        annotated_ocr_img, safety_keywords, snippet = await asyncio.to_thread(recognize_character.scan_safety_keywords, clean_frame)
+        
+        if safety_keywords:
+            encoded_bytes = await asyncio.to_thread(_encode_video_frame, annotated_ocr_img)
+            if encoded_bytes:
+                global latest_jpeg_bytes, latest_frame_seq
+                latest_jpeg_bytes = encoded_bytes
+                latest_frame_seq += 1
+                new_frame_event.set()
+
+            kw_str = ", ".join(safety_keywords).upper()
+            instruction_str = f"Warning sign detected: {kw_str}"
+            payload = {
+                "type": "log",
+                "log": f"WARNING SIGN DETECTED: {kw_str}",
+                "instruction": instruction_str, 
+                "mode": current_mode,
+                "ocr_snippet": snippet[:160],
+            }
+            if edge_device_ws: 
+                try: await edge_device_ws.send_text("ALERT: MOTOR_BOTH") 
+                except: pass
+            await stream_audio_to_glasses(instruction_str)
+            await _broadcast(payload)
+    except Exception as e:
+        print(f"[OCR ERROR] {e}")
 
 
 @app.get("/video_feed")
@@ -142,11 +179,15 @@ async def video_feed():
     async def generate():
         last_sent_seq = -1
         while True:
+            await new_frame_event.wait()
+            
             if latest_jpeg_bytes is not None and latest_frame_seq != last_sent_seq:
                 last_sent_seq = latest_frame_seq
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + latest_jpeg_bytes + b'\r\n')
-            await asyncio.sleep(0.01)
+            
+            new_frame_event.clear()
+            
     return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
@@ -196,79 +237,20 @@ async def background_ai_worker():
                 
                 clean_ocr_frame = img_to_process.copy()
 
+                # =========================================================
+                # THE UNIFIED RENDERING PIPELINE
+                # =========================================================
+                
+                # 1. Base Layer: Always process Hazard Detection
                 processed_img, status, hazards = await asyncio.to_thread(detect_hazard.analyze_frame, img_to_process)
                 latest_frame = processed_img
 
-                success, encoded_img = cv2.imencode('.jpg', latest_frame)
-                if success:
-                    latest_jpeg_bytes = encoded_img.tobytes()
-                    latest_frame_seq += 1
-
-                if status == "PROCESSED":
-                    action_command, log_message, audio_instruction = alerts.generate_alerts(hazards)
-
-                    # Strict checking to prevent the "Toggle Storm"
-                    if log_message.startswith("HAZARD"):
-                        await safe_ws_send_text(action_command)
-                        await stream_audio_to_glasses(audio_instruction)
-                        await _broadcast({"type": "log", "log": log_message, "instruction": audio_instruction, "mode": active_mode})
-                        is_currently_safe = False 
-
-                    elif log_message.startswith("SAFE"):
-                        if not is_currently_safe:
-                            await safe_ws_send_text(action_command)
-                            await stream_audio_to_glasses(audio_instruction)
-                            await _broadcast({"type": "log", "log": log_message, "instruction": audio_instruction, "mode": active_mode})
-                            is_currently_safe = True
-                            
-                    elif log_message.startswith("INFO"):
-                        pass # Ignore cooldowns entirely
-
-                if nav_session.active and (time.time() - last_nav_push) > 3.0:
-                    instr = nav_session.next_instruction()
-                    last_nav_push = time.time()
-                    if instr:
-                        await stream_audio_to_glasses(instr)
-                        await _broadcast({"type": "log", "log": f"NAVIGATION: {instr}", "instruction": instr, "mode": active_mode})
-
-                current_time = time.time()
-                if current_time - last_ocr_time > 2:
-                    annotated_ocr_img, safety_keywords, snippet = await asyncio.to_thread(recognize_character.scan_safety_keywords, clean_ocr_frame)
-                    
-                    if safety_keywords:
-                        latest_frame = annotated_ocr_img
-                        success, encoded_img = cv2.imencode('.jpg', latest_frame)
-                        if success:
-                            latest_jpeg_bytes = encoded_img.tobytes()
-                            latest_frame_seq += 1
-
-                            kw_str = ", ".join(safety_keywords).upper()
-                            instruction_str = f"Warning sign detected: {kw_str}"
-                            payload = {
-                                "type": "log",
-                                "log": f"WARNING SIGN DETECTED: {kw_str}",
-                                "instruction": instruction_str, 
-                                "mode": active_mode,
-                                "ocr_snippet": snippet[:160],
-                            }
-                            if edge_device_ws: 
-                                try: await edge_device_ws.send_text("ALERT: MOTOR_BOTH") 
-                                except: pass
-                            await stream_audio_to_glasses(instruction_str)
-                            await _broadcast(payload)
-                            
-                    last_ocr_time = current_time
-
-                if active_mode == "GUIDANCE":
+                # 2. Top Layer: Add Tool boxes ON TOP of hazard boxes
+                if active_mode in ["TOOL", "GUIDANCE"]:
                     img, tools, guidance_instruction = await asyncio.to_thread(
-                        recognize_tool.analyze_tools, processed_img.copy(), target_tool_name
+                        recognize_tool.analyze_tools, latest_frame, target_tool_name
                     )
                     latest_frame = img 
-                    
-                    success, encoded_img = cv2.imencode('.jpg', latest_frame)
-                    if success:
-                        latest_jpeg_bytes = encoded_img.tobytes()
-                        latest_frame_seq += 1
 
                     if active_mode == "TOOL":
                         if tools:
@@ -283,7 +265,6 @@ async def background_ai_worker():
                         if not dashboard_awake:
                             if guidance_instruction:
                                 current_time = time.time()
-                                # FIX: Only speak if the instruction changed OR 2.5 seconds have passed
                                 if guidance_instruction != last_guidance_text or (current_time - last_guidance_time > 2.5):
                                     await _broadcast({
                                         "type": "log", 
@@ -305,6 +286,51 @@ async def background_ai_worker():
                                     "mode": active_mode,
                                     "log": "Tool secured. Guidance mode deactivated."
                                 })
+
+                # 3. Encode EXACTLY ONCE per loop (Massive FPS boost!)
+                encoded_bytes = await asyncio.to_thread(_encode_video_frame, latest_frame)
+                if encoded_bytes:
+                    latest_jpeg_bytes = encoded_bytes
+                    latest_frame_seq += 1
+                    new_frame_event.set()
+
+                # =========================================================
+                # AUDIO & ALERTS PROCESSING
+                # =========================================================
+
+                # Handle Hazard Alerts
+                if status == "PROCESSED":
+                    action_command, log_message, audio_instruction = alerts.generate_alerts(hazards)
+
+                    if log_message.startswith("HAZARD"):
+                        await safe_ws_send_text(action_command)
+                        await stream_audio_to_glasses(audio_instruction)
+                        await _broadcast({"type": "log", "log": log_message, "instruction": audio_instruction, "mode": active_mode})
+                        is_currently_safe = False 
+
+                    elif log_message.startswith("SAFE"):
+                        if not is_currently_safe:
+                            await safe_ws_send_text(action_command)
+                            await stream_audio_to_glasses(audio_instruction)
+                            await _broadcast({"type": "log", "log": log_message, "instruction": audio_instruction, "mode": active_mode})
+                            is_currently_safe = True
+                            
+                    elif log_message.startswith("INFO"):
+                        pass 
+
+                # Handle Navigation Alerts
+                if nav_session.active and (time.time() - last_nav_push) > 3.0:
+                    instr = nav_session.next_instruction()
+                    last_nav_push = time.time()
+                    if instr:
+                        await stream_audio_to_glasses(instr)
+                        await _broadcast({"type": "log", "log": f"NAVIGATION: {instr}", "instruction": instr, "mode": active_mode})
+
+                # Handle Background OCR (Dispatched instantly so video never freezes)
+                current_time = time.time()
+                if current_time - last_ocr_time > 2:
+                    last_ocr_time = current_time
+                    asyncio.create_task(_background_safety_ocr(clean_ocr_frame.copy(), active_mode))
                             
         except Exception as e:
             print(f"\n[CRITICAL ERROR] AI Worker Crashed: {e}")
@@ -318,14 +344,15 @@ async def background_ai_worker():
 async def edge_endpoint(websocket: WebSocket):
     global latest_frame, edge_device_ws, raw_frame_buffer, global_ai_task
     
-    # If the ESP32 reconnects rapidly, murder the old AI thread before spawning a new one.
     if global_ai_task is not None:
         global_ai_task.cancel()
         
     await websocket.accept()
     edge_device_ws = websocket
     print("[SUCCESS] ESP32 Edge Device Connected!")
-    await _broadcast({"type": "status", "device_connected": True, "log": "SUCCESS: ESP32 Connected."})
+    
+    # Added 'mode' to the broadcast so the React Dashboard doesn't lose its current state
+    await _broadcast({"type": "status", "device_connected": True, "mode": active_mode, "log": "SUCCESS: ESP32 Connected."})
 
     global_ai_task = asyncio.create_task(background_ai_worker())
 
@@ -335,11 +362,9 @@ async def edge_endpoint(websocket: WebSocket):
             
             if "bytes" in data:
                 raw_bytes = data["bytes"]
-                np_arr = np.frombuffer(raw_bytes, np.uint8)
-                img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                img = await asyncio.to_thread(_decode_video_frame, raw_bytes)
                 
                 if img is not None:
-                    img = cv2.flip(img, 1)
                     raw_frame_buffer = img
 
             elif "text" in data:
@@ -358,25 +383,29 @@ async def edge_endpoint(websocket: WebSocket):
                     print(f"Error parsing text payload from ESP32: {e}")
 
     except WebSocketDisconnect:
-        edge_device_ws = None
-        latest_frame = None
-        if global_ai_task: global_ai_task.cancel() 
-        print("[WARNING] ESP32 Gracefully Disconnected.")
-        await _broadcast({"type": "status", "device_connected": False, "mode": active_mode, "log": "WARNING: ESP32 Disconnected."})
+        # Only trigger the disconnect sequence if THIS socket is the current active socket!
+        if edge_device_ws == websocket:
+            edge_device_ws = None
+            latest_frame = None
+            if global_ai_task: global_ai_task.cancel() 
+            print("[WARNING] ESP32 Gracefully Disconnected.")
+            await _broadcast({"type": "status", "device_connected": False, "mode": active_mode, "log": "WARNING: ESP32 Disconnected."})
+        else:
+            print("[INFO] Ghost connection closed. Active connection remains alive.")
         
     except Exception as e:
-        edge_device_ws = None
-        latest_frame = None
-        if global_ai_task: global_ai_task.cancel() 
-        print(f"[ERROR] ESP32 Connection Lost abruptly: {e}")
-        await _broadcast({"type": "status", "device_connected": False, "mode": active_mode, "log": "CRITICAL: Hardware Connection Lost."})
+        # Same validation check for abrupt hardware crashes
+        if edge_device_ws == websocket:
+            edge_device_ws = None
+            latest_frame = None
+            if global_ai_task: global_ai_task.cancel() 
+            print(f"[ERROR] ESP32 Connection Lost abruptly: {e}")
+            await _broadcast({"type": "status", "device_connected": False, "mode": active_mode, "log": "CRITICAL: Hardware Connection Lost."})
+        else:
+            print(f"[INFO] Ghost connection threw an error but was safely ignored.")
 
 
 async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) -> None:
-    """
-    Commands are executed server-side against the most recent frame.
-    This enables "active interaction" without interfering with the passive loop.
-    """
     global latest_frame, active_mode, nav_session, current_location, target_tool_name
 
     command = str(data.get("command", "")).upper().strip()
@@ -423,10 +452,11 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
         annotated_img, text, kws = await asyncio.to_thread(recognize_character.analyze_text, latest_frame.copy())
         
         global latest_jpeg_bytes, latest_frame_seq
-        success, encoded_img = cv2.imencode('.jpg', annotated_img)
-        if success:
-            latest_jpeg_bytes = encoded_img.tobytes()
+        encoded_bytes = await asyncio.to_thread(_encode_video_frame, annotated_img)
+        if encoded_bytes:
+            latest_jpeg_bytes = encoded_bytes
             latest_frame_seq += 1
+            new_frame_event.set()
             
         if not text:
             await stream_audio_to_glasses("No readable text detected.")
@@ -453,19 +483,16 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
         await stream_audio_to_glasses(msg)
         await _broadcast({"type": "log", "log": msg, "instruction": msg, "mode": active_mode})
         
-        # 1. Run the tool recognition model in a background thread
-        # target_tool is None because we want to detect ALL tools in view
         annotated_img, tools, guidance_text = await asyncio.to_thread(
             recognize_tool.analyze_tools, latest_frame.copy(), None
         )
         
-        # 2. Update the video feed with the newly drawn HUD bounding boxes
-        success, encoded_img = cv2.imencode('.jpg', annotated_img)
-        if success:
-            latest_jpeg_bytes = encoded_img.tobytes()
+        encoded_bytes = await asyncio.to_thread(_encode_video_frame, annotated_img)
+        if encoded_bytes:
+            latest_jpeg_bytes = encoded_bytes
             latest_frame_seq += 1
+            new_frame_event.set()
 
-        # 3. Handle the results
         if not tools:
             await stream_audio_to_glasses("No tools detected.")
             await _broadcast({"type": "log", "log": "TOOLS: No tools detected (or model not configured).", "instruction": "No tools detected.", "mode": "NORMAL"})
@@ -489,7 +516,6 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
         dest_query = str(data.get("destination", "")).strip()
         dest = gps.geocode_place(dest_query) if dest_query else None
         if dest is None:
-            # If geocoding is disabled/unavailable, accept raw lat/lon from UI.
             dest_lat = data.get("dest_lat")
             dest_lon = data.get("dest_lon")
             if dest_lat is not None and dest_lon is not None:
@@ -534,7 +560,6 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
             await _broadcast({"type": "log", "log": msg, "instruction": msg, "mode": active_mode})
         return
 
-    # Handle the Stop Search Command
     if command == "SEARCH_STOP":
         if active_mode == "GUIDANCE" or active_mode == "TOOL":
             active_mode = "NORMAL"
@@ -544,7 +569,6 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
             await _broadcast({"type": "log", "log": msg, "instruction": msg, "mode": active_mode})
         return
 
-    # Sync the "Awake" state from the React Dashboard
     if command == "DASHBOARD_WAKE":
         dashboard_awake = data.get("state", False)
         return

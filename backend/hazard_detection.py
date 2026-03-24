@@ -8,6 +8,7 @@ print("[HAZARD DETECTION] Hazard Model Loaded!")
 
 frame_counter = 0
 PROCESS_EVERY_N_FRAMES = 3
+last_drawn_boxes = []
 
 def draw_modern_hud_box(img, x1, y1, x2, y2, color, label):
     """Draws a sleek, modern camera-style HUD bounding box."""
@@ -41,14 +42,16 @@ def draw_modern_hud_box(img, x1, y1, x2, y2, color, label):
     cv2.putText(img, label, (x1 + 8, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, text_color, 1, cv2.LINE_AA)
 
 def analyze_frame(img: np.ndarray):
-    global frame_counter
+    global frame_counter, last_drawn_boxes
     frame_counter += 1
-    
-    if frame_counter % PROCESS_EVERY_N_FRAMES != 0:
-        return img, "SKIP", []
 
     if img is None:
         return img, "ERROR", []
+
+    if frame_counter % PROCESS_EVERY_N_FRAMES != 0:
+        for box_args in last_drawn_boxes:
+            draw_modern_hud_box(img, *box_args)
+        return img, "SKIP", []
         
     img_height, img_width = img.shape[:2]
     total_image_area = img_width * img_height
@@ -58,6 +61,8 @@ def analyze_frame(img: np.ndarray):
     results = model(img, stream=True, verbose=False, conf=0.45)
     critical_hazards = []
     
+    new_drawn_boxes = []
+
     for r in results:
         for box in r.boxes:
             class_id = int(box.cls[0])
@@ -92,5 +97,8 @@ def analyze_frame(img: np.ndarray):
                 
                 label = f"{urgency}: {object_name.upper()} ({position})"
                 draw_modern_hud_box(img, x1, y1, x2, y2, box_color, label)
+                new_drawn_boxes.append((x1, y1, x2, y2, box_color, label))
 
+    last_drawn_boxes = new_drawn_boxes
+    
     return img, "PROCESSED", critical_hazards
