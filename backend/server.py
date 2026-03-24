@@ -14,6 +14,8 @@ import edge_tts
 from pydub import AudioSegment
 import wave
 import os
+import database
+from pydantic import BaseModel
 
 # import four core system modules
 import hazard_detection as detect_hazard
@@ -23,6 +25,12 @@ import tool_recognition as recognize_tool
 import gps_navigation as gps
 
 app = FastAPI()
+
+class ToolData(BaseModel):
+    name: str
+    yolo_class: str
+    description: str = ""
+
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 tts_engine = pyttsx3.init()
@@ -55,6 +63,8 @@ raw_frame_buffer = None
 frame_pending = False 
 
 global_ai_task = None 
+
+cached_tool_map = None
 
 edge_ws_lock = asyncio.Lock()
 audio_playing_lock = asyncio.Lock()
@@ -157,10 +167,7 @@ async def stream_audio_to_glasses(text: str):
         return 
     asyncio.create_task(_process_and_stream_audio(text))
 
-# =========================================================================
-# NEW: Non-Blocking Background OCR Task
-# This prevents the 1-second video freeze every time the system reads text!
-# =========================================================================
+
 async def _background_safety_ocr(clean_frame: np.ndarray, current_mode: str):
     try:
         annotated_ocr_img, safety_keywords, snippet = await asyncio.to_thread(recognize_character.scan_safety_keywords, clean_frame)
@@ -187,6 +194,10 @@ async def _background_safety_ocr(clean_frame: np.ndarray, current_mode: str):
                 except: pass
             await stream_audio_to_glasses(instruction_str)
             await _broadcast(payload)
+            asyncio.create_task(asyncio.to_thread(
+                database.log_hazard, f"SIGN: {kw_str}", current_location[0], current_location[1]
+            ))
+
     except Exception as e:
         print(f"[OCR ERROR] {e}")
 
@@ -206,6 +217,32 @@ async def video_feed():
             new_frame_event.clear()
             
     return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/hazards")
+def api_get_hazards():
+    """React Frontend calls this to show the hazard history list."""
+    return database.get_hazard_history()
+
+@app.get("/api/tools")
+def api_get_tools():
+    """React Frontend calls this to load the tools list from Supabase."""
+    return database.get_all_tools()
+
+@app.post("/api/tools")
+def api_add_tool(tool: ToolData):
+    """React Frontend calls this to save a new tool to Supabase."""
+    tool_id = database.add_tool(tool.name, tool.yolo_class, tool.description)
+    if tool_id:
+        return {"id": tool_id, "message": "Tool added successfully"}
+    return {"error": "Failed to add tool"}
+
+@app.delete("/api/tools/{tool_id}")
+def api_delete_tool(tool_id: int):
+    """React Frontend calls this to remove a tool from Supabase."""
+    success = database.delete_tool(tool_id)
+    if success:
+        return {"message": "Tool deleted successfully"}
+    return {"error": "Failed to delete tool"}
 
 
 @app.websocket("/ws/dashboard")
@@ -265,7 +302,7 @@ async def background_ai_worker():
                 # 2. Top Layer: Add Tool boxes ON TOP of hazard boxes
                 if active_mode in ["TOOL", "GUIDANCE"]:
                     img, tools, guidance_instruction = await asyncio.to_thread(
-                        recognize_tool.analyze_tools, latest_frame, target_tool_name
+                        recognize_tool.analyze_tools, latest_frame, target_tool_name, 0.35, cached_tool_map
                     )
                     latest_frame = img 
 
@@ -323,6 +360,15 @@ async def background_ai_worker():
                         await safe_ws_send_text(action_command)
                         await stream_audio_to_glasses(audio_instruction)
                         await _broadcast({"type": "log", "log": log_message, "instruction": audio_instruction, "mode": active_mode})
+                        
+                        if is_currently_safe: # Only log the FIRST time a hazard appears to avoid spamming the DB
+                            # Extract simple name (e.g., "STAIRS") from the log message
+                            h_type = log_message.replace("HAZARD DETECTED: ", "").split("!")[0]
+                            # Use asyncio.to_thread so the database hit doesn't lag the video
+                            asyncio.create_task(asyncio.to_thread(
+                                database.log_hazard, h_type, current_location[0], current_location[1]
+                            ))
+
                         is_currently_safe = False 
 
                     elif log_message.startswith("SAFE"):
@@ -497,12 +543,19 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
             await websocket.send_text(json.dumps({"type": "log", "log": "TOOLS: No frame available yet.", "mode": active_mode}))
             return
             
-        msg = "Scanning tools..."
+        msg = "Syncing tools with cloud..."
+        await stream_audio_to_glasses(msg)
+        await _broadcast({"type": "log", "log": msg, "instruction": msg, "mode": active_mode})
+        
+        db_tools = await asyncio.to_thread(database.get_all_tools)
+        cached_tool_map = {t["yolo_class"].lower(): t["name"] for t in db_tools}
+        
+        msg = "Scanning area..."
         await stream_audio_to_glasses(msg)
         await _broadcast({"type": "log", "log": msg, "instruction": msg, "mode": active_mode})
         
         annotated_img, tools, guidance_text = await asyncio.to_thread(
-            recognize_tool.analyze_tools, latest_frame.copy(), None
+            recognize_tool.analyze_tools, latest_frame.copy(), None, 0.35, cached_tool_map
         )
         
         encoded_bytes = await asyncio.to_thread(_encode_video_frame, annotated_img)
@@ -576,6 +629,10 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
             msg = f"Initiating search and guidance for {target}."
             await stream_audio_to_glasses(msg)
             await _broadcast({"type": "log", "log": msg, "instruction": msg, "mode": active_mode})
+
+            db_tools = await asyncio.to_thread(database.get_all_tools)
+            cached_tool_map = {t["yolo_class"].lower(): t["name"] for t in db_tools}
+            
         return
 
     if command == "SEARCH_STOP":

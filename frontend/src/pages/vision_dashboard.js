@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Activity, Terminal, Trash2, Server, Cpu, Glasses, LogOut, Battery, Navigation, Command, Volume2, VolumeX, Mic, MicOff } from 'lucide-react';
+import { WS_BASE_URL } from '../config';
 
 const SYSTEM_MODES = {
   NORMAL: { id: 'NORMAL', label: 'Normal Mode', color: 'transparent' },
@@ -188,7 +189,7 @@ function VisionDashboard({ onNavigate }) {
     shouldReconnectRef.current = true;
 
     const connect = () => {
-      const ws = new WebSocket('ws://localhost:8000/ws/dashboard');
+      const ws = new WebSocket(`${WS_BASE_URL}/ws/dashboard`);
       wsRef.current = ws;
 
       ws.onopen = () => {

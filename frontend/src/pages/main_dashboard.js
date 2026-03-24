@@ -1,6 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { Camera, Cpu, Battery, MapPin, Eye, BrainCircuit, Wifi, ToolboxIcon, Activity } from 'lucide-react';
 
+const WidgetCard = ({ title, icon: Icon, children, className = "", delay = "0s", style = {} }) => (
+  <div className={`widget-card animate-slide-up ${className}`} style={{ animationDelay: delay, ...style }}>
+    <div className="widget-header">
+      <Icon size={18} className="widget-icon" />
+      {title}
+    </div>
+    <div className="widget-content">
+      {children}
+    </div>
+  </div>
+);
+
 function MainDashboard({ onNavigateVision }) {
   const [currentTime, setCurrentTime] = useState(new Date());
 
@@ -9,22 +21,9 @@ function MainDashboard({ onNavigateVision }) {
     return () => clearInterval(timer);
   }, []);
 
-  const WidgetCard = ({ title, icon: Icon, children, className = "" }) => (
-    <div className={`widget-card ${className}`}>
-      <div className="widget-header">
-        <Icon size={18} className="widget-icon" />
-        {title}
-      </div>
-      <div className="widget-content">
-        {children}
-      </div>
-    </div>
-  );
-
   return (
     <div className="dashboard-container">
       
-      {/* --- INJECTED CSS FOR RESPONSIVENESS & ANIMATIONS --- */}
       <style>{`
         /* Global Color Palette */
         :root {
@@ -62,68 +61,44 @@ function MainDashboard({ onNavigateVision }) {
           overflow-y: auto;
         }
 
-        /* * CUSTOM SCROLLBAR 
-         */
-        .custom-scroll::-webkit-scrollbar { 
-            width: 6px; 
-            background: transparent;
-        }
-        .custom-scroll::-webkit-scrollbar-track { 
-            background: transparent; 
-        }
-        .custom-scroll::-webkit-scrollbar-thumb { 
-            background-color: #334155; 
-            border-radius: 4px; 
-        }
-        .custom-scroll::-webkit-scrollbar-thumb:hover { 
-            background-color: #475569; 
-        }
+        /* * CUSTOM SCROLLBAR */
+        .custom-scroll::-webkit-scrollbar { width: 6px; background: transparent; }
+        .custom-scroll::-webkit-scrollbar-track { background: transparent; }
+        .custom-scroll::-webkit-scrollbar-thumb { background-color: #334155; border-radius: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb:hover { background-color: #475569; }
 
-        /* * RESPONSIVE GRID SYSTEM 
-         */
+        /* * RESPONSIVE GRID SYSTEM */
         .main-layout-grid {
           display: grid;
-          /* Default: 2 columns. Left is 2.5x wider than Right */
           grid-template-columns: 2.5fr 1fr; 
           gap: 32px;
           flex: 1;
           min-height: 0;
         }
 
-        /* AI Subsystems Grid (Nested inside Left Column) */
         .ai-grid {
           display: grid;
           grid-template-columns: repeat(2, 1fr);
           gap: 24px;
         }
 
-        /* Right Column (Diagnostics) */
         .diag-grid {
           display: flex;
           flex-direction: column;
           gap: 32px;
         }
 
-        /* MEDIA QUERY: When screen is smaller than 1200px (Half Screen) */
         @media (max-width: 1200px) {
-          .main-layout-grid {
-            grid-template-columns: 1fr; /* Stack columns on top of each other */
-          }
-          
-          /* Turn the vertical right column into a horizontal row */
-          .diag-grid {
-            flex-direction: row; 
-          }
+          .main-layout-grid { grid-template-columns: 1fr; }
+          .diag-grid { flex-direction: row; }
         }
 
-        /* MEDIA QUERY: When screen is VERY small (Mobile/Narrow) */
         @media (max-width: 800px) {
           .ai-grid { grid-template-columns: 1fr; }
           .diag-grid { flex-direction: column; }
         }
 
-        /* * CARD STYLING & HOVER EFFECTS 
-         */
+        /* * CARD STYLING & HOVER EFFECTS */
         .widget-card {
           background-color: var(--bg-card);
           border-radius: 16px;
@@ -155,18 +130,10 @@ function MainDashboard({ onNavigateVision }) {
           margin-bottom: 20px;
         }
 
-        .widget-icon {
-          color: var(--accent-blue);
-        }
+        .widget-icon { color: var(--accent-blue); }
+        .widget-content { flex: 1; display: flex; flex-direction: column; }
 
-        .widget-content {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-        }
-
-        /* * THE "BREATHING" HERO CARD 
-         */
+        /* * THE "BREATHING" HERO CARD */
         @keyframes breathingGlow {
           0% { box-shadow: 0 0 20px rgba(56, 189, 248, 0.2), inset 0 0 0 1px rgba(56, 189, 248, 0.1); }
           50% { box-shadow: 0 0 40px rgba(45, 212, 191, 0.4), inset 0 0 0 2px rgba(45, 212, 191, 0.3); }
@@ -220,13 +187,22 @@ function MainDashboard({ onNavigateVision }) {
         .badge-active { background: rgba(34, 197, 94, 0.1); color: var(--status-active); border: 1px solid rgba(34, 197, 94, 0.2); padding: 4px 8px; border-radius: 6px; font-size: 10px; font-weight: bold; letter-spacing: 0.5px; }
         .badge-standby { background: rgba(245, 158, 11, 0.1); color: var(--status-standby); border: 1px solid rgba(245, 158, 11, 0.2); padding: 4px 8px; border-radius: 6px; font-size: 10px; font-weight: bold; letter-spacing: 0.5px; }
         .badge-offline { background: rgba(168, 85, 247, 0.1); color: var(--accent-purple); border: 1px solid rgba(168, 85, 247, 0.2); padding: 4px 8px; border-radius: 6px; font-size: 10px; font-weight: bold; letter-spacing: 0.5px; }
+        
+        /* --- NEW ANIMATION CLASSES --- */
+        @keyframes slideUpFade {
+          from { opacity: 0; transform: translateY(20px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-slide-up { 
+          animation: slideUpFade 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; 
+          opacity: 0; 
+        }
       `}</style>
 
-      {/* ADDED 'custom-scroll' CLASS HERE */}
       <main className="custom-scroll">
         
         {/* HEADER */}
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
+        <header className="animate-slide-up" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px', animationDelay: '0.1s' }}>
           <div>
             <h2 style={{ margin: 0, fontSize: '32px', color: '#f8fafc', letterSpacing: '-1px', fontWeight: '800' }}>
               System Command
@@ -251,7 +227,7 @@ function MainDashboard({ onNavigateVision }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
             
             {/* Premium Hero Launch Card */}
-            <div className="hero-card">
+            <div className="hero-card animate-slide-up" style={{ animationDelay: '0.2s' }}>
               <Eye size={300} color="#2dd4bf" className="hero-bg-icon" />
 
               <h2 style={{ fontSize: '32px', margin: '0 0 16px 0', color: '#f8fafc', zIndex: 1, fontWeight: '900', letterSpacing: '-0.5px' }}>
@@ -268,11 +244,11 @@ function MainDashboard({ onNavigateVision }) {
             </div>
 
             {/* AI Subsystems Grid - Mapped to your 4 FYP Core Modules! */}
-            <h3 style={{ margin: '0 0 -16px 0', color: '#f8fafc', fontSize: '18px', fontWeight: '600' }}>Core AI Modules</h3>
+            <h3 className="animate-slide-up" style={{ margin: '0 0 -16px 0', color: '#f8fafc', fontSize: '18px', fontWeight: '600', animationDelay: '0.3s' }}>Core AI Modules</h3>
             <div className="ai-grid">
               
               {/* Module 1: Mobility & Safety */}
-              <WidgetCard title="Mobility & Safety" icon={BrainCircuit}>
+              <WidgetCard title="Mobility & Safety" icon={BrainCircuit} delay="0.4s">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                   <span style={{ color: '#f8fafc', fontWeight: '600', fontSize: '15px' }}>YOLO Spatial Engine</span>
                   <span className="badge-active">ACTIVE</span>
@@ -281,7 +257,7 @@ function MainDashboard({ onNavigateVision }) {
               </WidgetCard>
 
               {/* Module 2: Workplace Assistance */}
-              <WidgetCard title="Workplace Support" icon={ToolboxIcon}>
+              <WidgetCard title="Workplace Support" icon={ToolboxIcon} delay="0.5s">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                   <span style={{ color: '#f8fafc', fontWeight: '600', fontSize: '15px' }}>Custom Tool & OCR</span>
                   <span className="badge-standby">STANDBY</span>
@@ -296,7 +272,7 @@ function MainDashboard({ onNavigateVision }) {
           <div className="diag-grid">
             
             {/* Hardware Telemetry */}
-            <WidgetCard title="Edge Telemetry" icon={Cpu} style={{ flex: 'unset' }}>
+            <WidgetCard title="Edge Telemetry" icon={Cpu} style={{ flex: 'unset' }} delay="0.6s">
               <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: '#cbd5e1', fontSize: '14px' }}>
@@ -323,7 +299,7 @@ function MainDashboard({ onNavigateVision }) {
             </WidgetCard>
 
             {/* Location Context */}
-            <WidgetCard title="Geospatial Data" icon={MapPin} style={{ flex: 'unset' }}>
+            <WidgetCard title="Geospatial Data" icon={MapPin} style={{ flex: 'unset' }} delay="0.7s">
               <div style={{ backgroundColor: '#020617', borderRadius: '12px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '6px', border: '1px solid #1e293b' }}>
                 <span style={{ color: '#f8fafc', fontWeight: 'bold', fontSize: '16px' }}>Kuala Kurau, Perak</span>
                 <span style={{ color: '#38bdf8', fontSize: '13px', fontFamily: 'monospace', letterSpacing: '1px' }}>5.41° N, 100.33° W</span>

@@ -59,7 +59,7 @@ def analyze_tools(
     img: np.ndarray,
     target_tool: str = None,
     conf: float = 0.35,
-    allowed_classes: List[str] | None = None,
+    tool_map: Dict[str, str] | None = None, # NEW: Maps YOLO class to Friendly Name
 ) -> Tuple[np.ndarray, List[Dict[str, Any]], str]:
     if img is None or _model is None:
         return img, [], ""
@@ -75,22 +75,31 @@ def analyze_tools(
             class_id = int(box.cls[0])
             name = str(_model.names.get(class_id, class_id)).lower()
             
-            if allowed_classes and name not in allowed_classes:
-                continue
+            display_name = name.upper()
+            
+            # THE MAGIC: Filter by Database and swap to Friendly Name!
+            if tool_map is not None:
+                if name not in tool_map:
+                    continue # Ignore tools not registered in the cloud
+                display_name = tool_map[name].upper()
 
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             center_x = int((x1 + x2) / 2)
             center_y = int((y1 + y2) / 2)
             
-            detected.append({"name": name, "bbox": [float(x1), float(y1), float(x2), float(y2)]})
+            detected.append({
+                "name": display_name.title(), 
+                "yolo_class": name, 
+                "bbox": [float(x1), float(y1), float(x2), float(y2)]
+            })
 
             color = (255, 160, 50) # Sleek Blue 
             
-            if target_tool and target_tool.lower() in name:
+            if target_tool and target_tool.lower() in display_name.lower():
                 target_box = (center_x, center_y, x1, y1, x2, y2)
                 color = (0, 255, 255) # Electric Yellow for target
 
-            draw_modern_hud_box(annotated_img, x1, y1, x2, y2, color, name.upper())
+            draw_modern_hud_box(annotated_img, x1, y1, x2, y2, color, display_name)
 
     if not target_tool:
         return annotated_img, detected, ""
@@ -107,19 +116,11 @@ def analyze_tools(
     h, w, c = annotated_img.shape
     hand_landmarks = hand_results.multi_hand_landmarks[0]
     
-    # 1. Custom Hand Skeleton (Neon Cyan & White)
     custom_node_spec = mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=1, circle_radius=2)
     custom_line_spec = mp_drawing.DrawingSpec(color=(255, 230, 0), thickness=2) # Cyan (BGR)
     
-    mp_drawing.draw_landmarks(
-        annotated_img, 
-        hand_landmarks, 
-        mp_hands.HAND_CONNECTIONS,
-        custom_node_spec,
-        custom_line_spec
-    )
+    mp_drawing.draw_landmarks(annotated_img, hand_landmarks, mp_hands.HAND_CONNECTIONS, custom_node_spec, custom_line_spec)
 
-    # 2. Extract key finger landmarks
     index_finger = hand_landmarks.landmark[8]
     thumb_finger = hand_landmarks.landmark[4]
     
@@ -127,14 +128,12 @@ def analyze_tools(
     hand_y = int(index_finger.y * h)
     t_cx, t_cy, t_x1, t_y1, t_x2, t_y2 = target_box
 
-    # 3. Draw sleek "Targeting Reticles" and a fine guidance line
-    cv2.circle(annotated_img, (hand_x, hand_y), 8, (0, 255, 255), 2, cv2.LINE_AA) # Hollow outer ring on finger
-    cv2.circle(annotated_img, (hand_x, hand_y), 3, (0, 255, 255), -1, cv2.LINE_AA) # Solid inner dot
+    cv2.circle(annotated_img, (hand_x, hand_y), 8, (0, 255, 255), 2, cv2.LINE_AA) 
+    cv2.circle(annotated_img, (hand_x, hand_y), 3, (0, 255, 255), -1, cv2.LINE_AA) 
     
-    cv2.circle(annotated_img, (t_cx, t_cy), 8, (255, 0, 255), 2, cv2.LINE_AA) # Hollow outer ring on tool center
-    cv2.circle(annotated_img, (t_cx, t_cy), 3, (255, 0, 255), -1, cv2.LINE_AA) # Solid inner dot
+    cv2.circle(annotated_img, (t_cx, t_cy), 8, (255, 0, 255), 2, cv2.LINE_AA) 
+    cv2.circle(annotated_img, (t_cx, t_cy), 3, (255, 0, 255), -1, cv2.LINE_AA) 
     
-    # Fine connecting guidance line
     cv2.line(annotated_img, (hand_x, hand_y), (t_cx, t_cy), (0, 255, 255), 1, cv2.LINE_AA)
 
     pinch_dist = math.hypot(index_finger.x - thumb_finger.x, index_finger.y - thumb_finger.y)
