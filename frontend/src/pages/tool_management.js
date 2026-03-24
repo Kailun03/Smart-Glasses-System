@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { UploadCloud, Trash2, Database, Activity, CheckCircle, Clock } from 'lucide-react';
+import { API_BASE_URL } from '../config';
 
 function ToolManagement() {
   // 1. Live State for Tools and Form Inputs
@@ -12,7 +13,7 @@ function ToolManagement() {
   // 2. Fetch Tools from FastAPI / Supabase on Load
   const fetchTools = async () => {
     try {
-      const response = await fetch("http://localhost:8000/api/tools");
+      const response = await fetch(`${API_BASE_URL}/api/tools`);
       if (response.ok) {
         const data = await response.json();
         // Map the database response to our UI format
@@ -43,7 +44,7 @@ function ToolManagement() {
     
     setIsSubmitting(true);
     try {
-      const response = await fetch("http://localhost:8000/api/tools", {
+      const response = await fetch(`${API_BASE_URL}/api/tools`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -71,7 +72,7 @@ function ToolManagement() {
     if (!window.confirm("Are you sure you want to delete this tool?")) return;
     
     try {
-      const response = await fetch(`http://localhost:8000/api/tools/${id}`, {
+      const response = await fetch(`${API_BASE_URL}/api/tools/${id}`, {
         method: "DELETE"
       });
       if (response.ok) {
@@ -201,9 +202,19 @@ function ToolManagement() {
         .custom-scroll::-webkit-scrollbar-track { background: transparent; }
         .custom-scroll::-webkit-scrollbar-thumb { background-color: #334155; border-radius: 4px; }
         .custom-scroll::-webkit-scrollbar-thumb:hover { background-color: #475569; }
+
+        /* --- NEW ANIMATION CLASSES --- */
+        @keyframes slideUpFade {
+          from { opacity: 0; transform: translateY(20px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-slide-up { 
+          animation: slideUpFade 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; 
+          opacity: 0; 
+        }
       `}</style>
 
-      <header style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '32px', flexShrink: 0 }}>
+      <header className="animate-slide-up" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '32px', flexShrink: 0, animationDelay: '0.1s' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: '32px', color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '12px', fontWeight: '800', letterSpacing: '-0.5px' }}>
             Workplace Tool Training
@@ -216,7 +227,7 @@ function ToolManagement() {
         
         <div className="custom-scroll" style={{ display: 'flex', flexDirection: 'column', gap: '32px', overflowY: 'auto', paddingRight: '4px' }}>
           
-          <div className="widget-card">
+          <div className="widget-card animate-slide-up" style={{ animationDelay: '0.2s' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#f8fafc', fontWeight: '700', marginBottom: '20px', textTransform: 'uppercase', fontSize: '13px', letterSpacing: '0.5px' }}>
               <Database size={18} color="#38bdf8" /> Current Model Specs
             </div>
@@ -226,7 +237,7 @@ function ToolManagement() {
             <InfoRow label="Database Sync" value="Supabase Connected" highlight={true} />
           </div>
 
-          <div className="widget-card" style={{ flex: 1 }}>
+          <div className="widget-card animate-slide-up" style={{ flex: 1, animationDelay: '0.3s' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#f8fafc', fontWeight: '700', marginBottom: '24px', textTransform: 'uppercase', fontSize: '13px', letterSpacing: '0.5px' }}>
               <UploadCloud size={18} color="#2dd4bf" /> Register New Tool
             </div>
@@ -247,7 +258,7 @@ function ToolManagement() {
 
         </div>
 
-        <div className="widget-card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="widget-card animate-slide-up" style={{ padding: 0, overflow: 'hidden', animationDelay: '0.4s' }}>
           <div style={{ padding: '24px 32px', borderBottom: '1px solid rgba(255,255,255,0.05)', backgroundColor: 'rgba(0,0,0,0.2)' }}>
             <h2 style={{ margin: 0, fontSize: '16px', color: '#f8fafc', fontWeight: '700', letterSpacing: '0.5px' }}>Trained Tool Repository</h2>
           </div>
