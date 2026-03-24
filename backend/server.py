@@ -9,6 +9,9 @@ import json
 import time
 from typing import Any, Dict, Optional
 import pyttsx3
+import os
+import edge_tts
+from pydub import AudioSegment
 import wave
 import os
 
@@ -101,28 +104,41 @@ async def _broadcast(payload: Dict[str, Any]) -> None:
             dashboard_connections.remove(dead)
 
 
-def generate_speech_pcm(text: str) -> Optional[bytes]:
+def _convert_mp3_to_pcm(mp3_path: str) -> bytes:
+    """Synchronous background worker to decode the MP3 using FFmpeg."""
+    audio = AudioSegment.from_mp3(mp3_path)
+    # This perfectly matches your ESP32's I2S hardware expectations!
+    audio = audio.set_frame_rate(22050).set_channels(1).set_sample_width(2)
+    return audio.raw_data
+
+async def generate_speech_pcm(text: str) -> Optional[bytes]:
+    """Converts text into ultra-realistic neural speech PCM binary data."""
     try:
-        temp_filename = "temp_speech.wav"
-        tts_engine.save_to_file(text, temp_filename)
-        tts_engine.runAndWait()
+        temp_mp3 = f"temp_speech_{id(text)}.mp3" # Unique name to prevent overlap
         
-        with wave.open(temp_filename, 'rb') as wf:
-            pcm_data = wf.readframes(wf.getnframes())
-            
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
+        # 1. Generate the Neural Speech 
+        # "en-US-ChristopherNeural" is a professional male voice. 
+        # (You can also try "en-US-AriaNeural" for a highly realistic female voice)
+        communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
+        await communicate.save(temp_mp3)
+        
+        # 2. Run the heavy FFmpeg decoding in a background thread so video doesn't freeze!
+        pcm_data = await asyncio.to_thread(_convert_mp3_to_pcm, temp_mp3)
+        
+        # 3. Clean up the temp file
+        if os.path.exists(temp_mp3):
+            os.remove(temp_mp3)
             
         return pcm_data
     except Exception as e:
-        print(f"[ERROR] Failed to generate TTS audio: {e}")
+        print(f"[ERROR] Failed to generate Premium TTS audio: {e}")
         return None
-
 
 async def _process_and_stream_audio(text: str):
     if not text: return
     async with audio_playing_lock:
-        pcm_bytes = await asyncio.to_thread(generate_speech_pcm, text)
+        # FIX: We now beautifully await the natively asynchronous neural generation!
+        pcm_bytes = await generate_speech_pcm(text)
         if pcm_bytes:
             try:
                 CHUNK_SIZE = 4096 
@@ -132,6 +148,7 @@ async def _process_and_stream_audio(text: str):
                     await asyncio.sleep(0.1) 
             except Exception as e:
                 print(f"[WARNING] Audio stream interrupted: {e}")
+
 
 async def stream_audio_to_glasses(text: str):
     if edge_device_ws is None or not text:
@@ -471,6 +488,7 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
         }
         await stream_audio_to_glasses(text[:240])
         await _broadcast(payload)
+        active_mode = "NORMAL"
         return
 
     if command == "TOOLS_SCAN":

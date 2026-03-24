@@ -33,8 +33,10 @@ function VisionDashboard({ onNavigate }) {
   const isListeningRef = useRef(false);
   const recognitionRef = useRef(null);
 
+  const [isTerminalExpanded, setIsTerminalExpanded] = useState(true);
+
   // ==========================================
-  // NEW: WAKE WORD ("SIRI") STATE
+  // WAKE WORD ("SIRI") STATE
   // ==========================================
   const [isAwake, setIsAwake] = useState(false);
   const isAwakeRef = useRef(false);
@@ -51,7 +53,7 @@ function VisionDashboard({ onNavigate }) {
   }, [logs]);
 
   // ==========================================
-  // NEW: WAKE / SLEEP TIMER FUNCTIONS
+  // WAKE / SLEEP TIMER FUNCTIONS
   // ==========================================
   const wakeUpSystem = () => {
     setIsAwake(true);
@@ -467,7 +469,7 @@ function VisionDashboard({ onNavigate }) {
 
           .media-btn-container { position: relative; display: inline-flex; align-items: center; }
           .media-toggle-btn {
-              background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 50%;
+              background: rgba(170, 170, 170, 0.2); border: 1px solid rgba(255,255,255,0.1); border-radius: 50%;
               width: 32px; height: 32px; display: flex; justify-content: center; align-items: center; cursor: pointer;
               transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
           }
@@ -484,11 +486,42 @@ function VisionDashboard({ onNavigate }) {
           }
           .custom-tooltip-up::after { content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border-width: 5px; border-style: solid; border-color: #1e293b transparent transparent transparent; }
           .media-btn-container:hover .custom-tooltip-up { visibility: visible; opacity: 1; transform: translateX(-50%) translateY(0); }
+          .btn-container:hover .custom-tooltip-up { visibility: visible; opacity: 1; transform: translateX(-50%) translateY(0); }
+
+          .floating-bottom-right {
+              position: absolute; bottom: 24px; right: 24px; z-index: 50;
+              display: flex; gap: 12px; align-items: center;
+          }
+          .float-control-btn {
+              background-color: rgba(18, 84, 119, 0.2); backdrop-filter: blur(12px);
+              border: 1px solid rgba(255,255,255,0.1); border-radius: 50%;
+              width: 42px; height: 42px; display: flex; justify-content: center; align-items: center;
+              cursor: pointer; color: #f8fafc; transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+          }
+          .float-control-btn:hover { background-color: rgba(255, 255, 255, 0.15); transform: scale(1.05); }
+          .float-control-btn.terminal-active { color: #38bdf8; border-color: rgba(56, 189, 248, 0.4); box-shadow: 0 0 15px rgba(56, 189, 248, 0.3); }
+          .float-control-btn.exit-hover:hover { color: #ef4444; border-color: rgba(239, 68, 68, 0.4); box-shadow: 0 0 15px rgba(239, 68, 68, 0.3); }
       `}</style>
 
       {/* LEFT PANEL: Camera Feed & Overlays */}
       <div style={{ flex: 1, position: 'relative', backgroundColor: '#000', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
         
+        <div className="floating-bottom-right">
+            <div className="btn-container">
+              <button onClick={onNavigate} className="float-control-btn exit-hover">
+                <LogOut size={18} />
+              </button>
+              <span className="custom-tooltip-up">Exit Console</span>
+            </div>
+
+            <div className="btn-container">
+              <button onClick={() => setIsTerminalExpanded(!isTerminalExpanded)} className={`float-control-btn ${isTerminalExpanded ? 'terminal-active' : ''}`}>
+                <Terminal size={18} />
+              </button>
+              <span className="custom-tooltip-up">{isTerminalExpanded ? "Hide Terminal" : "Show Terminal"}</span>
+            </div>
+        </div>
+
         {/* Offline Overlay */}
         {!deviceConnected && (
             <div style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', color: '#ef4444', zIndex: 10 }}>
@@ -545,7 +578,7 @@ function VisionDashboard({ onNavigate }) {
               </span>
             </div>
 
-            {/* Dynamic Hardware Details (Only renders when device is connected) */}
+            {/* Dynamic Hardware Details */}
             {deviceConnected && (
               <>
                 <div style={{ width: '1px', height: '12px', backgroundColor: 'rgba(255,255,255,0.2)' }}></div>
@@ -575,7 +608,7 @@ function VisionDashboard({ onNavigate }) {
             position: 'absolute', 
             bottom: '24px', 
             left: '24px', 
-            backgroundColor: 'rgba(0, 0, 0, 0.4)', 
+            backgroundColor: 'rgba(0, 0, 0, 0.15)', 
             backdropFilter: 'blur(12px)', 
             padding: '8px 10px', 
             borderRadius: '28px', 
@@ -590,7 +623,7 @@ function VisionDashboard({ onNavigate }) {
                 onClick={toggleListening}
                 className={`media-toggle-btn ${isListening ? 'mic-active' : ''}`}
               >
-                {isListening ? <Mic size={18} color="#38bdf8" /> : <MicOff size={18} color="#0277bd" />}
+                {isListening ? <Mic size={18} color='rgb(17, 129, 185)' /> : <MicOff size={18} color="rgb(59, 130, 177)" />}
               </button>
               <span className="custom-tooltip-up">{isListening ? "Disable Voice Commands" : "Enable Voice Commands"}</span>
             </div>
@@ -604,7 +637,7 @@ function VisionDashboard({ onNavigate }) {
                 onClick={toggleAudio}
                 className={`media-toggle-btn ${audioEnabled ? 'audio-active' : ''}`}
               >
-                {audioEnabled ? <Volume2 size={18} color="#22c55e" /> : <VolumeX size={18} color="#ef4444" />}
+                {audioEnabled ? <Volume2 size={18} color='rgb(6, 149, 30)' /> : <VolumeX size={18} color='rgb(227, 71, 71)' />}
               </button>
               <span className="custom-tooltip-up">{audioEnabled ? "Mute Voice Assistant" : "Enable Voice Assistant"}</span>
             </div>
@@ -630,7 +663,7 @@ function VisionDashboard({ onNavigate }) {
           </div>
         )}
 
-        {/* NEW: Siri-style Active Listening HUD */}
+        {/* Active Listening HUD */}
         {isAwake && (
           <div style={{ 
               position: 'absolute', 
@@ -688,128 +721,146 @@ function VisionDashboard({ onNavigate }) {
       </div>
 
       {/* RIGHT PANEL: Sidebar Terminal */}
-      <div style={{ width: '300px', backgroundColor: '#16161a', display: 'flex', flexDirection: 'column', borderLeft: '1px solid rgba(255,255,255,0.05)', padding: '16px', zIndex: 30, boxShadow: '-5px 0 25px rgba(0,0,0,0.5)' }}>
+      <div style={{ 
+          width: isTerminalExpanded ? '300px' : '0px', 
+          backgroundColor: '#16161a', 
+          display: 'flex', 
+          flexDirection: 'column', 
+          borderLeft: isTerminalExpanded ? '1px solid rgba(255,255,255,0.05)' : 'none', 
+          padding: isTerminalExpanded ? '16px' : '16px 0px', 
+          zIndex: 30, 
+          boxShadow: isTerminalExpanded ? '-5px 0 25px rgba(0,0,0,0.5)' : 'none',
+          transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s ease, border 0.3s ease',
+          overflow: isTerminalExpanded ? 'visible' : 'hidden' 
+      }}>
         
-        {/* Terminal Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#f8fafc', fontWeight: 'bold', fontSize: '13px', letterSpacing: '0.5px' }}>
-            <Terminal size={16} />
-            Terminal
-          </div>
+        {/* Inner container to prevent text squashing and tooltip clipping */}
+        <div style={{
+            display: 'flex', 
+            flexDirection: 'column', 
+            height: '100%', 
+            width: '100%', 
+            minWidth: '268px', 
+            opacity: isTerminalExpanded ? 1 : 0, 
+            transition: 'opacity 0.2s ease', 
+            pointerEvents: isTerminalExpanded ? 'auto' : 'none'
+        }}>
           
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {/* Terminal Header */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#f8fafc', fontWeight: 'bold', fontSize: '13px', letterSpacing: '0.5px' }}>
+              <Terminal size={16} />
+              Terminal
+            </div>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
 
-            {/* Active Commands Palette */}
-            <div className={`cmd-container ${commandsEnabled ? "enabled" : "disabled"}`}>
-              <button className={`cmd-btn ${commandsEnabled ? "" : "disabled"}`} onClick={(e) => e.preventDefault()} aria-label="Active Commands">
-                <Command size={18} />
-              </button>
+              {/* Active Commands Palette */}
+              <div className={`cmd-container ${commandsEnabled ? "enabled" : "disabled"}`}>
+                <button className={`cmd-btn ${commandsEnabled ? "" : "disabled"}`} onClick={(e) => e.preventDefault()} aria-label="Active Commands">
+                  <Command size={18} />
+                </button>
 
-              {!commandsEnabled && (
-                <span className="cmd-tooltip">Commands locked: {backendConnected ? "Edge offline" : "Host offline"}.</span>
-              )}
+                {!commandsEnabled && (
+                  <span className="cmd-tooltip">Commands locked: {backendConnected ? "Edge offline" : "Host offline"}.</span>
+                )}
 
-              {commandsEnabled && (
-                <div className="cmd-panel">
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <div style={{ width: 8, height: 8, borderRadius: 999, backgroundColor: '#22c55e', boxShadow: '0 0 12px rgba(34,197,94,0.55)' }} />
-                      <span style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '0.6px', textTransform: 'uppercase', color: '#e2e8f0' }}>Active Commands</span>
+                {commandsEnabled && (
+                  <div className="cmd-panel">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ width: 8, height: 8, borderRadius: 999, backgroundColor: '#22c55e', boxShadow: '0 0 12px rgba(34,197,94,0.55)' }} />
+                        <span style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '0.6px', textTransform: 'uppercase', color: '#e2e8f0' }}>Active Commands</span>
+                      </div>
+                      <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 700 }}>Hover to keep open</span>
                     </div>
-                    <span style={{ fontSize: '10px', color: '#64748b', fontWeight: 700 }}>Hover to keep open</span>
-                  </div>
 
-                  <div style={{ display: 'flex', gap: '16px' }}>
-                    <button
-                      onClick={() => sendCommand({ command: "FULL_OCR" })}
-                      style={{ flex: 1, backgroundColor: 'rgba(56, 189, 248, 0.10)', border: '1px solid rgba(56, 189, 248, 0.25)', color: '#f8fafc', padding: '10px', borderRadius: '10px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, transition: 'transform 0.15s ease' }}
-                      onMouseOver={(e) => (e.currentTarget.style.transform = 'translateY(-1px)')} onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
-                    >
-                      Full OCR
-                    </button>
-                    <button
-                      onClick={() => sendCommand({ command: "TOOLS_SCAN" })}
-                      style={{ flex: 1, backgroundColor: 'rgba(45, 212, 191, 0.10)', border: '1px solid rgba(45, 212, 191, 0.25)', color: '#f8fafc', padding: '10px', borderRadius: '10px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, transition: 'transform 0.15s ease' }}
-                      onMouseOver={(e) => (e.currentTarget.style.transform = 'translateY(-1px)')} onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
-                    >
-                      Scan Tools
-                    </button>
-                  </div>
-
-                  <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <input
-                      value={navDestination}
-                      onChange={(e) => { 
-                        setNavDestination(e.target.value); 
-                        navDestRef.current = e.target.value; 
-                      }}
-                      placeholder="Destination: 'lat,lon' or place"
-                      style={{ width: '93%', backgroundColor: 'rgba(2, 6, 23, 0.75)', border: '1px solid rgba(148, 163, 184, 0.20)', color: '#f8fafc', padding: '10px 10px', borderRadius: '10px', fontSize: '12px' }}
-                    />
                     <div style={{ display: 'flex', gap: '16px' }}>
                       <button
-                        onClick={startNavigation}
-                        disabled={!navDestination.trim() || navState.pending}
-                        style={{ flex: 1, backgroundColor: 'rgba(34, 197, 94, 0.12)', border: '1px solid rgba(34, 197, 94, 0.28)', color: '#f8fafc', padding: '10px 12px', borderRadius: '10px', cursor: (!navDestination.trim() || navState.pending) ? 'not-allowed' : 'pointer', opacity: (!navDestination.trim() || navState.pending) ? 0.55 : 1, fontSize: '12px', fontWeight: 900, letterSpacing: '0.3px', transition: 'transform 0.15s ease' }}
-                        onMouseOver={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.transform = 'translateY(-1px)'; }} onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
+                        onClick={() => sendCommand({ command: "FULL_OCR" })}
+                        style={{ flex: 1, backgroundColor: 'rgba(56, 189, 248, 0.10)', border: '1px solid rgba(56, 189, 248, 0.25)', color: '#f8fafc', padding: '10px', borderRadius: '10px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, transition: 'transform 0.15s ease' }}
+                        onMouseOver={(e) => (e.currentTarget.style.transform = 'translateY(-1px)')} onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
                       >
-                        {navState.pending ? "Starting…" : "Start"}
+                        Full OCR
                       </button>
                       <button
-                        onClick={() => sendCommand({ command: "NAV_STOP" })}
-                        disabled={!navState.active && !navState.pending}
-                        style={{ flex: 1, backgroundColor: 'rgba(239, 68, 68, 0.10)', border: '1px solid rgba(239, 68, 68, 0.25)', color: '#f8fafc', padding: '10px 12px', borderRadius: '10px', cursor: (!navState.active && !navState.pending) ? 'not-allowed' : 'pointer', opacity: (!navState.active && !navState.pending) ? 0.55 : 1, fontSize: '12px', fontWeight: 900, letterSpacing: '0.3px', transition: 'transform 0.15s ease' }}
-                        onMouseOver={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.transform = 'translateY(-1px)'; }} onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
+                        onClick={() => sendCommand({ command: "TOOLS_SCAN" })}
+                        style={{ flex: 1, backgroundColor: 'rgba(45, 212, 191, 0.10)', border: '1px solid rgba(45, 212, 191, 0.25)', color: '#f8fafc', padding: '10px', borderRadius: '10px', cursor: 'pointer', fontSize: '12px', fontWeight: 800, transition: 'transform 0.15s ease' }}
+                        onMouseOver={(e) => (e.currentTarget.style.transform = 'translateY(-1px)')} onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
                       >
-                        Stop
+                        Scan Tools
                       </button>
                     </div>
-                    {(navState.active || navState.pending) && (
-                      <div style={{ marginTop: '10px', fontSize: '10px', color: '#94a3b8', fontWeight: 700 }}>
-                        {navPaused ? "Navigation paused: EDGE offline." : navState.active ? `Navigation active.` : "Starting navigation…"}
+
+                    <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                      <input
+                        value={navDestination}
+                        onChange={(e) => { 
+                          setNavDestination(e.target.value); 
+                          navDestRef.current = e.target.value; 
+                        }}
+                        placeholder="Destination: 'lat,lon' or place"
+                        style={{ width: '93%', backgroundColor: 'rgba(2, 6, 23, 0.75)', border: '1px solid rgba(148, 163, 184, 0.20)', color: '#f8fafc', padding: '10px 10px', borderRadius: '10px', fontSize: '12px' }}
+                      />
+                      <div style={{ display: 'flex', gap: '16px' }}>
+                        <button
+                          onClick={startNavigation}
+                          disabled={!navDestination.trim() || navState.pending}
+                          style={{ flex: 1, backgroundColor: 'rgba(34, 197, 94, 0.12)', border: '1px solid rgba(34, 197, 94, 0.28)', color: '#f8fafc', padding: '10px 12px', borderRadius: '10px', cursor: (!navDestination.trim() || navState.pending) ? 'not-allowed' : 'pointer', opacity: (!navDestination.trim() || navState.pending) ? 0.55 : 1, fontSize: '12px', fontWeight: 900, letterSpacing: '0.3px', transition: 'transform 0.15s ease' }}
+                          onMouseOver={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.transform = 'translateY(-1px)'; }} onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
+                        >
+                          {navState.pending ? "Starting…" : "Start"}
+                        </button>
+                        <button
+                          onClick={() => sendCommand({ command: "NAV_STOP" })}
+                          disabled={!navState.active && !navState.pending}
+                          style={{ flex: 1, backgroundColor: 'rgba(239, 68, 68, 0.10)', border: '1px solid rgba(239, 68, 68, 0.25)', color: '#f8fafc', padding: '10px 12px', borderRadius: '10px', cursor: (!navState.active && !navState.pending) ? 'not-allowed' : 'pointer', opacity: (!navState.active && !navState.pending) ? 0.55 : 1, fontSize: '12px', fontWeight: 900, letterSpacing: '0.3px', transition: 'transform 0.15s ease' }}
+                          onMouseOver={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.transform = 'translateY(-1px)'; }} onMouseOut={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
+                        >
+                          Stop
+                        </button>
                       </div>
-                    )}
+                      {(navState.active || navState.pending) && (
+                        <div style={{ marginTop: '10px', fontSize: '10px', color: '#94a3b8', fontWeight: 700 }}>
+                          {navPaused ? "Navigation paused: EDGE offline." : navState.active ? `Navigation active.` : "Starting navigation…"}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
+
+              {/* Clear Logs */}
+              <div className="btn-container">
+                <button 
+                  onClick={() => setLogs([])} 
+                  style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'color 0.2s ease' }} 
+                  onMouseOver={(e) => e.currentTarget.style.color = '#ef4444'} 
+                  onMouseOut={(e) => e.currentTarget.style.color = '#64748b'}
+                >
+                  <Trash2 size={16} />
+                </button>
+                <span className="custom-tooltip">Clear Logs</span>
+              </div>
             </div>
 
-            {/* Clear Logs */}
-            <div className="btn-container">
-              <button 
-                onClick={() => setLogs([])} 
-                style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'color 0.2s ease' }} 
-                onMouseOver={(e) => e.currentTarget.style.color = '#ef4444'} 
-                onMouseOut={(e) => e.currentTarget.style.color = '#64748b'}
-              >
-                <Trash2 size={16} />
-              </button>
-              <span className="custom-tooltip">Clear Logs</span>
-            </div>
+          </div>
+
+          {/* Logs Container */}
+          <div className="custom-log-container" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', paddingRight: '4px' }}>
+            {logs.map((log, index) => (
+              <div key={index} style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                <Glasses size={14} color="#475569" style={{ flexShrink: 0 }} />
+                <div style={{ backgroundColor: 'rgba(255, 255, 255, 0.04)', borderRadius: '8px', padding: '8px 12px', flex: 1, borderLeft: `3px solid ${log.type === 'alert' ? '#ef4444' : log.type === 'error' ? '#f59e0b' : log.type === 'info' ? '#38bdf8' : '#22c55e'}`, fontSize: '11px', color: '#cbd5e1', lineHeight: '1.4' }}>
+                  <span style={{ color: '#64748b', fontSize: '10px', display: 'block', marginBottom: '2px' }}>{log.time}</span>
+                  <span style={{ wordBreak: 'break-word' }}>{log.text}</span>
+                </div>
+              </div>
+            ))}
+            <div ref={logsEndRef} />
           </div>
 
         </div>
-
-        {/* Logs Container */}
-        <div className="custom-log-container" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '4px' }}>
-          {logs.map((log, index) => (
-            <div key={index} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <Glasses size={14} color="#475569" style={{ flexShrink: 0 }} />
-              <div style={{ backgroundColor: 'rgba(255, 255, 255, 0.04)', borderRadius: '8px', padding: '8px 12px', flex: 1, borderLeft: `3px solid ${log.type === 'alert' ? '#ef4444' : log.type === 'error' ? '#f59e0b' : log.type === 'info' ? '#38bdf8' : '#22c55e'}`, fontSize: '11px', color: '#cbd5e1', lineHeight: '1.4' }}>
-                <span style={{ color: '#64748b', fontSize: '10px', display: 'block', marginBottom: '2px' }}>{log.time}</span>
-                <span style={{ wordBreak: 'break-word' }}>{log.text}</span>
-              </div>
-            </div>
-          ))}
-          <div ref={logsEndRef} />
-        </div>
-
-        {/* Bottom Action Button */}
-        <button onClick={onNavigate} style={{ marginTop: '16px', backgroundColor: '#312e81', color: '#fff', border: 'none', padding: '12px', borderRadius: '8px', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', transition: 'background-color 0.2s' }} onMouseOver={(e) => e.target.style.backgroundColor = '#3730a3'} onMouseOut={(e) => e.target.style.backgroundColor = '#312e81'}>
-            <LogOut size={16} />
-            Exit Console
-        </button>
-
       </div>
     </div>
   );
