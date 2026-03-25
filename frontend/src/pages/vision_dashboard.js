@@ -130,14 +130,18 @@ function VisionDashboard({ onNavigate }) {
           goToSleep();
         } 
         else if (transcript.includes("navigate to")) {
-          const dest = transcript.split("navigate to")[1].trim();
+          const dest = transcript.split("navigate to")[1]?.trim();
+          
           if (dest) {
             setNavDestination(dest);
             navDestRef.current = dest; 
             sendCommand({ command: "NAV_START", destination: dest });
+            goToSleep(); 
+          } else {
+            speakInstruction("Please specify the destination clearly.");
+            resetSleepTimer(); 
           }
-          goToSleep();
-        } 
+        }
         else if (transcript.includes("start navigation")) {
           startNavigation();
           goToSleep();
@@ -221,26 +225,36 @@ function VisionDashboard({ onNavigate }) {
               }
           }
 
-          if (data.log) {
-            if (data.type !== "status") {
-              setDeviceConnected(true); 
-            }
+          if (data.type === "navigation") {
+            setNavState({ active: true, pending: false });
+            setLogs(prev => {
+              const lastLog = prev.length > 0 ? prev[prev.length - 1] : null;
+              if (lastLog && lastLog.text === data.instruction && (Date.now() - lastLog.ts < 2000)) return prev;
+              return [...prev, { time: new Date().toLocaleTimeString(), text: `NAVIGATION: ${data.instruction}`, type: "info", ts: Date.now() }];
+            });
+          }
 
+          if (data.log) {
             const isHazard = data.log.includes("HAZARD");
             const isWarning = data.log.includes("WARNING");
 
             if (data.log.startsWith("NAVIGATION STARTED")) {
-              setNavState({
-                active: true,
-                provider: data.nav?.provider || null,
-                dest: data.nav?.dest || null,
-                pending: false,
-              });
-            } else if (data.log.startsWith("NAVIGATION STOPPED")) {
-              setNavState({ active: false, provider: null, dest: null, pending: false });
-            } else if (data.log.startsWith("NAVIGATION: Destination not set")) {
+              setNavState({ active: true, provider: null, dest: null, pending: false });
+            } else if (
+                data.log.startsWith("NAVIGATION STOPPED") || 
+                data.log.startsWith("NAVIGATION: Destination not set") ||
+                data.log.startsWith("NAVIGATION ERROR")
+            ) {
               setNavState({ active: false, provider: null, dest: null, pending: false });
               setActiveMode(SYSTEM_MODES.NORMAL);
+              
+              if (data.log.startsWith("NAVIGATION ERROR")) {
+                 // Flash the error on the screen for 3 seconds
+                 setCurrentInstruction(data.log.replace("NAVIGATION ERROR: ", ""));
+                 setTimeout(() => setCurrentInstruction(""), 3000);
+              } else {
+                 setCurrentInstruction("");
+              }
             }
             
             setLogs(prev => {
