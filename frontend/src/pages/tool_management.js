@@ -1,17 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { UploadCloud, Trash2, Database, Activity, CheckCircle, Clock } from 'lucide-react';
+import { UploadCloud, Trash2, Database, Activity, CheckCircle, Clock, ServerCrash, RotateCw } from 'lucide-react';
 import { API_BASE_URL } from '../config';
 
 function ToolManagement() {
-  // 1. Live State for Tools and Form Inputs
   const [tools, setTools] = useState([]);
   const [toolName, setToolName] = useState("");
   const [yoloClass, setYoloClass] = useState("");
   const [toolDesc, setToolDesc] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isOffline, setIsOffline] = useState(false);
+  const [isLoading, setLoading] = useState(true);
 
-  // 2. Fetch Tools from FastAPI / Supabase on Load
+  // Fetch Tools from FastAPI / Supabase on Load
   const fetchTools = async () => {
+    setLoading(true);
+    setIsOffline(false);
     try {
       const response = await fetch(`${API_BASE_URL}/api/tools`);
       if (response.ok) {
@@ -25,9 +28,14 @@ function ToolManagement() {
           status: 'Deployed' // Assuming they are ready immediately for the prototype
         }));
         setTools(formattedTools);
+      } else {
+        throw new Error("Server response not ok");
       }
     } catch (error) {
       console.error("Failed to fetch tools:", error);
+      setIsOffline(true);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -35,7 +43,7 @@ function ToolManagement() {
     fetchTools();
   }, []);
 
-  // 3. Handle Adding a New Tool
+  // Handle Adding a New Tool
   const handleAddTool = async () => {
     if (!toolName.trim() || !yoloClass.trim()) {
       alert("Tool Name and YOLO Class are required.");
@@ -67,7 +75,7 @@ function ToolManagement() {
     }
   };
 
-  // 4. Handle Deleting a Tool
+  // Handle Deleting a Tool
   const handleDeleteTool = async (id) => {
     if (!window.confirm("Are you sure you want to delete this tool?")) return;
     
@@ -203,7 +211,6 @@ function ToolManagement() {
         .custom-scroll::-webkit-scrollbar-thumb { background-color: #334155; border-radius: 4px; }
         .custom-scroll::-webkit-scrollbar-thumb:hover { background-color: #475569; }
 
-        /* --- NEW ANIMATION CLASSES --- */
         @keyframes slideUpFade {
           from { opacity: 0; transform: translateY(20px); }
           to { opacity: 1; transform: translateY(0); }
@@ -212,14 +219,46 @@ function ToolManagement() {
           animation: slideUpFade 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards; 
           opacity: 0; 
         }
+
+        .status-badge {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 16px;
+          background-color: rgba(15, 23, 42, 0.6);
+          backdrop-filter: blur(8px);
+          border-radius: 12px;
+          border: 1px solid rgba(255,255,255,0.05);
+          transition: all 0.3s ease;
+        }
+
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        .spinning { animation: spin 1s linear infinite; }
+
       `}</style>
 
-      <header className="animate-slide-up" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '32px', flexShrink: 0, animationDelay: '0.1s' }}>
+      <header className="animate-slide-up" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', flexShrink: 0, animationDelay: '0.1s' }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: '32px', color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '12px', fontWeight: '800', letterSpacing: '-0.5px' }}>
-            Workplace Tool Training
+          <h1 style={{ margin: 0, fontSize: '32px', color: '#f8fafc', fontWeight: '800', letterSpacing: '-0.5px' }}>
+            Workplace Intelligence
           </h1>
-          <p style={{ margin: '6px 0 0 0', color: '#94a3b8', fontSize: '15px' }}>Manage custom datasets and model deployment statuses.</p>
+          <p style={{ margin: '6px 0 0 0', color: '#94a3b8', fontSize: '15px' }}>Manage custom vision datasets and trained model support.</p>
+        </div>
+        
+        <div className="header-actions">
+          {/* Host Connection Indicator */}
+          <div className="status-badge" style={{ 
+            borderColor: isLoading ? 'rgba(161, 159, 159, 0.2)' : isOffline ? 'rgba(239, 68, 68, 0.2)' : 'rgba(34, 197, 94, 0.2)',
+          }}>
+            <div style={{ 
+              width: '8px', height: '8px', borderRadius: '50%', 
+              backgroundColor: isLoading? '#808080' : isOffline ? '#ef4444' : '#22c55e',
+              boxShadow: `0 0 8px ${isLoading ? '#808080' : isOffline ? '#ef4444' : '#22c55e'}`
+            }} />
+            <span style={{ fontSize: '11px', fontWeight: '700', color: isLoading ? '#808080' : isOffline ? '#ef4444' : '#22c55e', textTransform: 'uppercase', letterSpacing: '1px' }}>
+              {isLoading ? 'Connecting ...' : isOffline ? ' Host Offline' : 'Host Online'}
+            </span>
+          </div>
         </div>
       </header>
 
@@ -274,26 +313,61 @@ function ToolManagement() {
                 </tr>
               </thead>
               <tbody>
-                {tools.length === 0 && (
-                  <tr><td colSpan="4" style={{ padding: '40px', textAlign: 'center', color: '#64748b' }}>No tools registered in database.</td></tr>
-                )}
-                {tools.map((tool) => (
-                  <tr key={tool.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', transition: 'background-color 0.2s' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'rgba(56, 189, 248, 0.03)'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}>
-                    <td style={{ padding: '20px 32px', color: '#f8fafc', fontSize: '14px', fontWeight: '500' }}>
-                      {tool.name}
-                      {tool.description && <div style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>{tool.description}</div>}
-                    </td>
-                    <td style={{ padding: '20px 32px', color: '#94a3b8', fontSize: '13px', fontFamily: 'monospace' }}>{tool.yolo_class}</td>
-                    <td style={{ padding: '20px 32px' }}>
-                      {getStatusBadge(tool.status)}
-                    </td>
-                    <td style={{ padding: '20px 32px', textAlign: 'right' }}>
-                      <div style={{ display: 'inline-flex', gap: '16px' }}>
-                        <button onClick={() => handleDeleteTool(tool.id)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', transition: 'color 0.2s' }} onMouseOver={(e)=>e.currentTarget.style.color='#ef4444'} onMouseOut={(e)=>e.currentTarget.style.color='#64748b'} title="Delete"><Trash2 size={16} /></button>
+                {isLoading && tools.length === 0 ? (
+                  <tr>
+                    <td colSpan="4" style={{ padding: '40px', textAlign: 'center' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                        <RotateCw size={24} className="spinning" style={{ opacity: 0.5, color: '#64748b' }} />
+                        <span style={{ color: '#64748b', fontSize: '14px' }}>Fetching telemetry from cloud...</span>
                       </div>
                     </td>
                   </tr>
-                ))}
+                ) : isOffline ? (
+                  <tr>
+                    <td colSpan="4" style={{ padding: '40px', textAlign: 'center' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                        <ServerCrash size={32} style={{ color: '#ef4444', opacity: 0.8 }} />
+                        <span style={{ color: '#ef4444', fontSize: '14px' }}>Cannot connect to host server. Please verify backend is running.</span>
+                      </div>
+                    </td>
+                  </tr>
+                ) : tools.length === 0 ? (
+                  <tr>
+                    <td colSpan="4" style={{ padding: '40px', textAlign: 'center', color: '#64748b', fontSize: '14px' }}>
+                      No tools registered in database.
+                    </td>
+                  </tr>
+                ) : (
+                  tools.map((tool) => (
+                    <tr 
+                      key={tool.id} 
+                      style={{ borderBottom: '1px solid rgba(255,255,255,0.02)', transition: 'background-color 0.2s' }} 
+                      className="table-row-hover"
+                    >
+                      <td style={{ padding: '20px 32px', color: '#f8fafc', fontSize: '14px', fontWeight: '500' }}>
+                        {tool.name}
+                        {tool.description && <div style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>{tool.description}</div>}
+                      </td>
+                      <td style={{ padding: '20px 32px', color: '#94a3b8', fontSize: '13px', fontFamily: 'monospace' }}>
+                        {tool.yolo_class}
+                      </td>
+                      <td style={{ padding: '20px 32px' }}>
+                        {getStatusBadge(tool.status)}
+                      </td>
+                      <td style={{ padding: '20px 32px', textAlign: 'right' }}>
+                        <button 
+                          onClick={() => handleDeleteTool(tool.id)} 
+                          style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', transition: 'color 0.2s' }} 
+                          onMouseOver={(e) => e.currentTarget.style.color = '#ef4444'} 
+                          onMouseOut={(e) => e.currentTarget.style.color = '#64748b'} 
+                          title="Delete"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>

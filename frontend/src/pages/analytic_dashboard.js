@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, forwardRef } from 'react';
-import { ShieldAlert, TrendingUp, AlertTriangle, List, RotateCw, Eye, Type, AlignLeft, Calendar, ArrowDownUp, XCircle } from 'lucide-react';
+import { ShieldAlert, TrendingUp, AlertTriangle, List, RotateCw, Eye, Type, AlignLeft, Calendar, ArrowDownUp, XCircle, ServerCrash } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import { API_BASE_URL } from '../config';
@@ -37,7 +37,8 @@ const CustomDateInput = forwardRef(({ value, onClick, isFiltered }, ref) => (
 
 function AnalyticDashboard() {
   const [hazards, setHazards] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [isLoading, setLoading] = useState(true);
+  const [isOffline, setIsOffline] = useState(false);
 
   const [filterSource, setFilterSource] = useState('ALL'); 
   const [filterDate, setFilterDate] = useState(''); // Stores YYYY-MM-DD
@@ -46,10 +47,12 @@ function AnalyticDashboard() {
 
   const fetchHazards = useCallback(async () => {
     setLoading(true);
+    setIsOffline(false);
     try {
       const response = await fetch(`${API_BASE_URL}/api/hazards`);
+      if (!response.ok) throw new Error("Network response was not ok");
+
       const data = await response.json();
-      
       if (Array.isArray(data)) {
         const processedData = data.map(h => {
           const rawType = h.hazard_type || "UNKNOWN";
@@ -68,6 +71,7 @@ function AnalyticDashboard() {
     } catch (err) {
       console.error("Failed to load hazard analytics:", err);
       setHazards([]);
+      setIsOffline(true);
     } finally {
       setLoading(false);
     }
@@ -228,25 +232,85 @@ function AnalyticDashboard() {
 
         @media (max-width: 1200px) { .main-content-grid { grid-template-columns: 1fr; } .right-sidebar { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; } }
         @media (max-width: 800px) { .right-sidebar { grid-template-columns: 1fr; } .controls-wrapper { flex-direction: column; align-items: flex-start; } }
+      
+        .status-badge {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 16px;
+          background-color: rgba(15, 23, 42, 0.6);
+          backdrop-filter: blur(8px);
+          border-radius: 12px;
+          border: 1px solid rgba(255,255,255,0.05);
+          transition: all 0.3s ease;
+        }
+
+        .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+
+        /* Responsive tweak */
+        @media (max-width: 800px) {
+          .dashboard-header { flex-direction: column; align-items: flex-start; gap: 20px; }
+          .header-actions { width: 100%; justify-content: space-between; }
+
       `}</style>
 
       {/* HEADER */}
-      <header className="animate-slide-up" style={{ marginBottom: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+      <header className="dashboard-header animate-slide-up" style={{ 
+        marginBottom: '32px', 
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center', 
+        flexShrink: 0, 
+        animationDelay: '0.1s' 
+      }}>
         <div>
-          <h1 style={{ fontSize: '32px', fontWeight: '800', letterSpacing: '-1px', margin: 0, color: '#f8fafc' }}>Safety Intelligence</h1>
-          <p style={{ color: '#94a3b8', margin: '6px 0 0 0', fontSize: '15px' }}>Spatial hazards and environmental text warnings.</p>
+          <h1 style={{ fontSize: '32px', fontWeight: '800', letterSpacing: '-1px', margin: 0, color: '#f8fafc' }}>
+            Safety Intelligence
+          </h1>
+          <p style={{ color: '#94a3b8', margin: '6px 0 0 0', fontSize: '15px' }}>
+            Spatial hazards and environmental text warnings.
+          </p>
         </div>
-        <button className="refresh-btn" onClick={fetchHazards} disabled={loading}>
-          <RotateCw size={18} className={loading ? 'spinning' : ''} />
-          {loading ? 'Syncing Cloud...' : 'Refresh Data'}
-        </button>
+        
+        <div className="header-actions">
+          {/* Host Connection Indicator */}
+          <div className="status-badge" style={{ 
+            borderColor: isLoading ? 'rgba(161, 159, 159, 0.2)' : isOffline ? 'rgba(239, 68, 68, 0.2)' : 'rgba(34, 197, 94, 0.2)',
+            boxShadow: isLoading ? 'rgba(161, 159, 159, 0.2)' : isOffline ? '0 0 15px rgba(239, 68, 68, 0.05)' : '0 0 15px rgba(34, 197, 94, 0.05)'
+          }}>
+            <div style={{ 
+              width: '8px', 
+              height: '8px', 
+              borderRadius: '50%', 
+              backgroundColor: isLoading? '#808080' : isOffline ? '#ef4444' : '#22c55e',
+              boxShadow: `0 0 8px ${ isLoading? '#808080' : isOffline ? '#ef4444' : '#22c55e'}`
+            }} />
+            <span style={{ 
+              fontSize: '11px', 
+              fontWeight: '700', 
+              color: isLoading? '#808080' : isOffline ? '#ef4444' : '#22c55e', 
+              textTransform: 'uppercase', 
+              letterSpacing: '1px' 
+            }}>
+              {isLoading ? 'Connecting ...' : isOffline ? ' Host Offline' : 'Host Online'}
+            </span>
+          </div>
+
+          <button className="refresh-btn" onClick={fetchHazards} disabled={isLoading}>
+            <RotateCw size={18} className={isLoading ? 'spinning' : ''} />
+            {isLoading ? 'Syncing...' : 'Refresh'}
+          </button>
+        </div>
       </header>
 
       {/* TOP STATS */}
       <div className="analytics-grid">
-        <StatWidget label="Filtered Events" value={loading ? "..." : totalIncidents} icon={ShieldAlert} color="#38bdf8" delay="0.1s" />
-        <StatWidget label="Physical Hazards" value={loading ? "..." : physicalHazards.length} icon={Eye} color="#f59e0b" delay="0.2s" />
-        <StatWidget label="Critical Alerts" value={loading ? "..." : criticalCount} icon={AlertTriangle} color="#ef4444" delay="0.3s" />
+        <StatWidget label="Filtered Events" value={isLoading ? "..." : totalIncidents} icon={ShieldAlert} color="#38bdf8" delay="0.1s" />
+        <StatWidget label="Physical Hazards" value={isLoading ? "..." : physicalHazards.length} icon={Eye} color="#f59e0b" delay="0.2s" />
+        <StatWidget label="Critical Alerts" value={isLoading ? "..." : criticalCount} icon={AlertTriangle} color="#ef4444" delay="0.3s" />
       </div>
 
       <div className="main-content-grid">
@@ -309,10 +373,15 @@ function AnalyticDashboard() {
               <span>Timestamp</span>
             </div>
             
-            {loading && hazards.length === 0 ? (
+            {isLoading && hazards.length === 0 ? (
               <div style={{ padding: '60px 20px', textAlign: 'center', color: '#64748b', fontSize: '14px' }}>
                 <RotateCw size={24} className="spinning" style={{ marginBottom: '12px', opacity: 0.5 }} />
                 <br/>Fetching telemetry from cloud...
+              </div>
+            ) : isOffline ? (
+              <div style={{ padding: '60px 20px', textAlign: 'center', color: '#ef4444', fontSize: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                <ServerCrash size={32} opacity={0.8} />
+                Cannot connect to host server. Please verify backend is running.
               </div>
             ) : filteredAndSortedHazards.length === 0 ? (
               <div style={{ padding: '60px 20px', textAlign: 'center', color: '#64748b', fontSize: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
