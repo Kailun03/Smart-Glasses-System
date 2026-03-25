@@ -130,14 +130,18 @@ function VisionDashboard({ onNavigate }) {
           goToSleep();
         } 
         else if (transcript.includes("navigate to")) {
-          const dest = transcript.split("navigate to")[1].trim();
+          const dest = transcript.split("navigate to")[1]?.trim();
+          
           if (dest) {
             setNavDestination(dest);
             navDestRef.current = dest; 
             sendCommand({ command: "NAV_START", destination: dest });
+            goToSleep(); 
+          } else {
+            speakInstruction("Please specify the destination clearly.");
+            resetSleepTimer(); 
           }
-          goToSleep();
-        } 
+        }
         else if (transcript.includes("start navigation")) {
           startNavigation();
           goToSleep();
@@ -221,11 +225,16 @@ function VisionDashboard({ onNavigate }) {
               }
           }
 
-          if (data.log) {
-            if (data.type !== "status") {
-              setDeviceConnected(true); 
-            }
+          if (data.type === "navigation") {
+            setNavState({ active: true, pending: false });
+            setLogs(prev => {
+              const lastLog = prev.length > 0 ? prev[prev.length - 1] : null;
+              if (lastLog && lastLog.text === data.instruction && (Date.now() - lastLog.ts < 2000)) return prev;
+              return [...prev, { time: new Date().toLocaleTimeString(), text: `NAVIGATION: ${data.instruction}`, type: "info", ts: Date.now() }];
+            });
+          }
 
+          if (data.log) {
             const isHazard = data.log.includes("HAZARD");
             const isWarning = data.log.includes("WARNING");
 

@@ -422,7 +422,8 @@ async def edge_endpoint(websocket: WebSocket):
     print("[SUCCESS] ESP32 Edge Device Connected!")
     
     # Added 'mode' to the broadcast so the React Dashboard doesn't lose its current state
-    await _broadcast({"type": "status", "device_connected": True, "mode": active_mode, "log": "SUCCESS: ESP32 Connected."})
+    conn_msg = "Hardware connected. Resuming navigation." if active_mode == "NAVIGATION" else "Hardware connected."
+    await _broadcast({"type": "status", "device_connected": True, "mode": active_mode, "log": "SUCCESS: ESP32 Connected.", "instruction": conn_msg})
 
     global_ai_task = asyncio.create_task(background_ai_worker())
 
@@ -453,26 +454,26 @@ async def edge_endpoint(websocket: WebSocket):
                     print(f"Error parsing text payload from ESP32: {e}")
 
     except WebSocketDisconnect:
-        # Only trigger the disconnect sequence if THIS socket is the current active socket!
         if edge_device_ws == websocket:
             edge_device_ws = None
             latest_frame = None
             if global_ai_task: global_ai_task.cancel() 
-            print("[WARNING] ESP32 Gracefully Disconnected.")
-            await _broadcast({"type": "status", "device_connected": False, "mode": active_mode, "log": "WARNING: ESP32 Disconnected."})
-        else:
-            print("[INFO] Ghost connection closed. Active connection remains alive.")
-        
+            print("[WARNING] ESP32 Disconnected.")
+            
+            # NEW FIX: Announce disconnection out loud
+            disconn_msg = "Hardware connection lost. Navigation paused." if active_mode == "NAVIGATION" else "Hardware connection lost."
+            await _broadcast({"type": "status", "device_connected": False, "mode": active_mode, "log": "WARNING: ESP32 Disconnected.", "instruction": disconn_msg})
+            
     except Exception as e:
-        # Same validation check for abrupt hardware crashes
         if edge_device_ws == websocket:
             edge_device_ws = None
             latest_frame = None
             if global_ai_task: global_ai_task.cancel() 
-            print(f"[ERROR] ESP32 Connection Lost abruptly: {e}")
-            await _broadcast({"type": "status", "device_connected": False, "mode": active_mode, "log": "CRITICAL: Hardware Connection Lost."})
-        else:
-            print(f"[INFO] Ghost connection threw an error but was safely ignored.")
+            print(f"[ERROR] ESP32 Connection Lost: {e}")
+            
+            # NEW FIX: Announce disconnection out loud
+            disconn_msg = "Hardware connection lost. Navigation paused." if active_mode == "NAVIGATION" else "Hardware connection lost."
+            await _broadcast({"type": "status", "device_connected": False, "mode": active_mode, "log": "CRITICAL: Connection Lost.", "instruction": disconn_msg})
 
 
 async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) -> None:
@@ -597,7 +598,6 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
         dest_name = "Destination"
 
         if dest_query:
-            # Send the searching instruction so the dashboard speaks it and updates the HUD
             msg = f"Searching for {dest_query}..."
             await stream_audio_to_glasses(msg)
             await _broadcast({"type": "log", "log": f"NAVIGATION: {msg}", "instruction": msg, "mode": active_mode})
@@ -633,11 +633,22 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
         
         nav_session.start(plan)
         
+        # Tell the AI tracker that we are handling the first step manually
+        # so it doesn't immediately overwrite the audio!
+        nav_session.announced_current = True
+        
         mins = int(plan.duration_sec // 60)
         mins_text = f"{mins} minute" if mins == 1 else f"{mins} minutes"
         dist = int(plan.total_distance_m)
         
-        announcement = f"Route found to {dest_name}. It is {dist} meters away, about a {mins_text} walk."
+        # Extract the first step and merge it into ONE flowing sentence.
+        first_step_text = plan.steps[0].instruction if plan.steps else "Proceed to destination."
+        
+        announcement = f"Route found to {dest_name}. It is {dist} meters away, about a {mins_text} walk. {first_step_text}"
+        
+        # Appending the paused warning if the hardware is currently offline
+        if edge_device_ws is None:
+            announcement += " Navigation is paused. Hardware is offline."
         
         await stream_audio_to_glasses(announcement)
         await _broadcast({
