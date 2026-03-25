@@ -382,12 +382,19 @@ async def background_ai_worker():
                         pass 
 
                 # Handle Navigation Alerts
-                if nav_session.active and (time.time() - last_nav_push) > 3.0:
-                    instr = nav_session.next_instruction()
-                    last_nav_push = time.time()
+                if nav_session.active:
+                    # Pass the live coordinates into the engine
+                    instr = nav_session.process_location(current_location[0], current_location[1])
+                    
+                    # If the engine yields an instruction, announce it!
                     if instr:
                         await stream_audio_to_glasses(instr)
                         await _broadcast({"type": "log", "log": f"NAVIGATION: {instr}", "instruction": instr, "mode": active_mode})
+                        
+                        # Shut down mode if arrived
+                        if instr == "You have arrived at your destination.":
+                            active_mode = "NORMAL"
+                            await _broadcast({"type": "status", "mode": "NORMAL", "device_connected": True})
 
                 # Handle Background OCR (Dispatched instantly so video never freezes)
                 current_time = time.time()
@@ -585,33 +592,61 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
     if command == "NAV_START":
         active_mode = "NAVIGATION"
         dest_query = str(data.get("destination", "")).strip()
-        dest = gps.geocode_place(dest_query) if dest_query else None
-        if dest is None:
-            dest_lat = data.get("dest_lat")
-            dest_lon = data.get("dest_lon")
+        
+        dest_coords = None
+        dest_name = "Destination"
+
+        if dest_query:
+            # Send the searching instruction so the dashboard speaks it and updates the HUD
+            msg = f"Searching for {dest_query}..."
+            await stream_audio_to_glasses(msg)
+            await _broadcast({"type": "log", "log": f"NAVIGATION: {msg}", "instruction": msg, "mode": active_mode})
+            
+            geo_result = await asyncio.to_thread(gps.geocode_place, dest_query, current_location[0], current_location[1])
+            
+            if geo_result:
+                dest_coords = (geo_result[0], geo_result[1])
+                dest_name = geo_result[2]
+            else:
+                err_msg = f"Could not find {dest_query}."
+                await stream_audio_to_glasses(err_msg)
+                await _broadcast({"type": "log", "log": f"NAVIGATION ERROR: {err_msg}", "instruction": err_msg, "mode": "NORMAL"})
+                active_mode = "NORMAL"
+                return
+        else:
+            dest_lat, dest_lon = data.get("dest_lat"), data.get("dest_lon")
             if dest_lat is not None and dest_lon is not None:
                 try:
-                    dest = (float(dest_lat), float(dest_lon))
-                except Exception:
-                    dest = None
-        if dest is None:
-            await stream_audio_to_glasses("Destination not set.")
-            await _broadcast({"type": "log", "log": "NAVIGATION: Destination not set. Provide a place name (enable geocoding) or dest_lat/dest_lon.", "mode": active_mode})
+                    dest_coords = (float(dest_lat), float(dest_lon))
+                    dest_name = "Custom Coordinates"
+                except Exception: pass
+
+        if dest_coords is None:
+            err_msg = "Destination not set."
+            await stream_audio_to_glasses(err_msg)
+            await _broadcast({"type": "log", "log": f"NAVIGATION ERROR: {err_msg}", "instruction": err_msg, "mode": "NORMAL"})
+            active_mode = "NORMAL"
             return
 
         start = current_location
-        plan = gps.plan_navigation(start, dest)
+        plan = await asyncio.to_thread(gps.plan_navigation, start, dest_coords, dest_name)
+        
         nav_session.start(plan)
-        await stream_audio_to_glasses("Navigation started.")
-        await _broadcast(
-            {
-                "type": "log",
-                "log": f"NAVIGATION STARTED ({plan.provider}): {plan.total_distance_m:.0f}m",
-                "instruction": "Navigation started.",
-                "mode": active_mode,
-                "nav": {"provider": plan.provider, "total_distance_m": plan.total_distance_m, "dest": {"lat": dest[0], "lon": dest[1]}},
-            }
-        )
+        
+        mins = int(plan.duration_sec // 60)
+        mins_text = f"{mins} minute" if mins == 1 else f"{mins} minutes"
+        dist = int(plan.total_distance_m)
+        
+        announcement = f"Route found to {dest_name}. It is {dist} meters away, about a {mins_text} walk."
+        
+        await stream_audio_to_glasses(announcement)
+        await _broadcast({
+            "type": "log",
+            "log": f"NAVIGATION STARTED: {dist}m, {mins} mins to {dest_name}",
+            "instruction": announcement,
+            "mode": active_mode,
+            "nav": {"provider": plan.provider, "total_distance_m": dist, "dest": {"lat": dest_coords[0], "lon": dest_coords[1]}},
+        })
         return
 
     if command == "NAV_STOP":

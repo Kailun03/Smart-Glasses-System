@@ -230,17 +230,22 @@ function VisionDashboard({ onNavigate }) {
             const isWarning = data.log.includes("WARNING");
 
             if (data.log.startsWith("NAVIGATION STARTED")) {
-              setNavState({
-                active: true,
-                provider: data.nav?.provider || null,
-                dest: data.nav?.dest || null,
-                pending: false,
-              });
-            } else if (data.log.startsWith("NAVIGATION STOPPED")) {
-              setNavState({ active: false, provider: null, dest: null, pending: false });
-            } else if (data.log.startsWith("NAVIGATION: Destination not set")) {
+              setNavState({ active: true, provider: null, dest: null, pending: false });
+            } else if (
+                data.log.startsWith("NAVIGATION STOPPED") || 
+                data.log.startsWith("NAVIGATION: Destination not set") ||
+                data.log.startsWith("NAVIGATION ERROR")
+            ) {
               setNavState({ active: false, provider: null, dest: null, pending: false });
               setActiveMode(SYSTEM_MODES.NORMAL);
+              
+              if (data.log.startsWith("NAVIGATION ERROR")) {
+                 // Flash the error on the screen for 3 seconds
+                 setCurrentInstruction(data.log.replace("NAVIGATION ERROR: ", ""));
+                 setTimeout(() => setCurrentInstruction(""), 3000);
+              } else {
+                 setCurrentInstruction("");
+              }
             }
             
             setLogs(prev => {
