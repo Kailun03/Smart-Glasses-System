@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Shield, LayoutDashboard, Database, Settings, ShieldAlert } from 'lucide-react';
+import { SYSTEM_VERSION } from '../config';
 
 function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnalytics }) {
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
@@ -48,13 +49,13 @@ function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnaly
       <nav 
         onMouseEnter={() => setIsSidebarExpanded(true)}
         onMouseLeave={() => setIsSidebarExpanded(false)}
-        style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: isSidebarExpanded ? '260px' : '40px', backgroundColor: 'rgba(5, 29, 37, 0.6)', borderRight: '1px solid #1e293b', padding: '24px 8px', display: 'flex', flexDirection: 'column', gap: '32px', transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)', overflowX: 'hidden', whiteSpace: 'nowrap', zIndex: 50 }}
+        style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: isSidebarExpanded ? '260px' : '40px', backgroundColor: 'rgba(5, 29, 37, 0.6)', borderRight: '1px solid #1e293b', padding: '28px 8px', display: 'flex', flexDirection: 'column', gap: '32px', transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)', overflowX: 'hidden', whiteSpace: 'nowrap', zIndex: 50 }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', paddingBottom: '24px', borderBottom: '1px solid #1e293b' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', paddingBottom: '16px', borderBottom: '1px solid #1e293b' }}>
           <div style={{ backgroundColor: 'rgba(15, 89, 121, 0.5)', padding: '8px', borderRadius: '12px' }}><Shield size={24} color="#38bdf8" /></div>
           <div style={{ opacity: isSidebarExpanded ? 1 : 0 }}>
-            <h1 style={{ margin: 0, fontSize: '18px', color: '#f8fafc' }}>Assistive OS</h1>
-            <span style={{ color: '#64748b', fontSize: '12px' }}>v2.0.4-beta</span>
+            <h1 style={{ margin: 0, fontSize: '18px', color: '#f8fafc' }}>AURA Vision</h1>
+            <p style={{ color: '#64748b', fontSize: '12px', marginTop: '8px' }}>Augmented User Reality Assistant</p>
           </div>
         </div>
 
@@ -65,12 +66,10 @@ function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnaly
           <NavButton id="home" icon={LayoutDashboard} label="Control Center" onClick={onNavigateHome} />
           <NavButton id="tools" icon={Database} label="Tool Management" onClick={onNavigateTools} />
           <NavButton id="analytics" icon={ShieldAlert} label="Safety Analytics" onClick={onNavigateAnalytics} />
+          <NavButton id="settings" icon={Settings} label="System Settings" onClick={onNavigateHome} />
         </div>
 
-        <button style={{ backgroundColor: 'transparent', color: '#64748b', border: 'none', padding: '12px 10px', display: 'flex', alignItems: 'center', gap: '16px', cursor: 'not-allowed' }}>
-            <div style={{ display: 'flex', justifyContent: 'center' }}><Settings size={20} /></div>
-            <span style={{ opacity: isSidebarExpanded ? 1 : 0 }}>Settings (Locked)</span>
-        </button>
+        { isSidebarExpanded && <span style={{ color: '#64748b', fontSize: '12px', paddingLeft: '18px' }}>System Version : {SYSTEM_VERSION}</span> }
       </nav>
     </>
   );
