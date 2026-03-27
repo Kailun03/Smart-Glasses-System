@@ -60,7 +60,7 @@ def log_hazard(hazard_type: str, lat: float = None, lon: float = None):
     except Exception as e:
         print(f"[ERROR] Failed to log hazard: {e}")
 
-def get_hazard_history(limit: int = 50):
+def get_hazard_history(limit: int = 10000):
     """Fetches the most recent hazard events."""
     try:
         response = supabase.table("hazard_logs") \

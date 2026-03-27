@@ -23,6 +23,7 @@ import alerting_system as alerts
 import ocr as recognize_character
 import tool_recognition as recognize_tool
 import gps_navigation as gps
+from voice_processor import VoiceCommandEngine
 
 app = FastAPI()
 
@@ -65,6 +66,14 @@ frame_pending = False
 global_ai_task = None 
 
 cached_tool_map = None
+
+voice_engine = VoiceCommandEngine()
+audio_buffer = bytearray()
+last_audio_time = 0
+
+is_glasses_awake = False
+last_wake_time = 0
+WAKE_WINDOW = 7
 
 edge_ws_lock = asyncio.Lock()
 audio_playing_lock = asyncio.Lock()
@@ -151,11 +160,11 @@ async def _process_and_stream_audio(text: str):
         pcm_bytes = await generate_speech_pcm(text)
         if pcm_bytes:
             try:
-                CHUNK_SIZE = 4096 
+                CHUNK_SIZE = 8192 
                 for i in range(0, len(pcm_bytes), CHUNK_SIZE):
                     chunk = pcm_bytes[i : i + CHUNK_SIZE]
                     await safe_ws_send_bytes(chunk)
-                    await asyncio.sleep(0.1) 
+                    await asyncio.sleep(0.01)
             except Exception as e:
                 print(f"[WARNING] Audio stream interrupted: {e}")
 
@@ -421,9 +430,8 @@ async def edge_endpoint(websocket: WebSocket):
     edge_device_ws = websocket
     print("[SUCCESS] ESP32 Edge Device Connected!")
     
-    # Added 'mode' to the broadcast so the React Dashboard doesn't lose its current state
-    conn_msg = "Hardware connected. Resuming navigation." if active_mode == "NAVIGATION" else "Hardware connected."
-    await _broadcast({"type": "status", "device_connected": True, "mode": active_mode, "log": "SUCCESS: ESP32 Connected.", "instruction": conn_msg})
+    # Notify dashboard immediately that hardware is SYNCED
+    await _broadcast({"type": "status", "device_connected": True, "mode": active_mode, "log": "SUCCESS: ESP32 Connected."})
 
     global_ai_task = asyncio.create_task(background_ai_worker())
 
@@ -433,10 +441,27 @@ async def edge_endpoint(websocket: WebSocket):
             
             if "bytes" in data:
                 raw_bytes = data["bytes"]
-                img = await asyncio.to_thread(_decode_video_frame, raw_bytes)
                 
-                if img is not None:
-                    raw_frame_buffer = img
+                # Identify if JPEG (Image) or PCM (Audio)
+                if len(raw_bytes) > 2000 and raw_bytes.startswith(b'\xff\xd8'):
+                    img = await asyncio.to_thread(_decode_video_frame, raw_bytes)
+                    if img is not None:
+                        raw_frame_buffer = img
+                else:
+                    # 1. Collect Audio Chunks
+                    global audio_buffer, last_audio_time
+                    audio_buffer.extend(raw_bytes)
+                    last_audio_time = time.time()
+                    
+                    # 2. Trigger voice AI only when buffer is full
+                    # Using a lower threshold for better responsiveness
+                    if len(audio_buffer) > 90000: 
+                        current_audio = bytes(audio_buffer)
+                        audio_buffer.clear()
+                        
+                        # Run voice processing in a SEPARATE task 
+                        # so this loop can return to 'receive()' immediately.
+                        asyncio.create_task(process_voice_in_background(current_audio, websocket))
 
             elif "text" in data:
                 try:
@@ -445,35 +470,62 @@ async def edge_endpoint(websocket: WebSocket):
                         global current_location
                         current_location = (payload["lat"], payload["lon"])
                         await _broadcast({
-                            "type": "status",
-                            "device_connected": True,
-                            "mode": active_mode,
+                            "type": "status", "device_connected": True, "mode": active_mode,
                             "location": {"lat": current_location[0], "lon": current_location[1]}
                         })
-                except Exception as e:
-                    print(f"Error parsing text payload from ESP32: {e}")
+                except Exception: pass
 
     except WebSocketDisconnect:
-        if edge_device_ws == websocket:
-            edge_device_ws = None
-            latest_frame = None
-            if global_ai_task: global_ai_task.cancel() 
-            print("[WARNING] ESP32 Disconnected.")
+        # Standard cleanup
+        edge_device_ws = None
+        if global_ai_task: global_ai_task.cancel() 
+        await _broadcast({"type": "status", "device_connected": False, "log": "WARNING: ESP32 Disconnected."})
+
+
+async def process_voice_in_background(audio_data, websocket):
+    global is_glasses_awake, last_wake_time, active_mode
+    
+    try:
+        text = await asyncio.to_thread(voice_engine.process_raw_pcm, audio_data)
+        if not text: return
+        
+        print(f"[VOICE] Heard: {text}")
+
+        if any(word in text for word in ["hey glasses", "glasses", "wake up", "hey glass", "okay glass", "hey", "glass"]):
+            is_glasses_awake = True
             
-            # NEW FIX: Announce disconnection out loud
-            disconn_msg = "Hardware connection lost. Navigation paused." if active_mode == "NAVIGATION" else "Hardware connection lost."
-            await _broadcast({"type": "status", "device_connected": False, "mode": active_mode, "log": "WARNING: ESP32 Disconnected.", "instruction": disconn_msg})
+            # Reset Frontend Timer
+            await _broadcast({
+                "type": "status", 
+                "is_awake": True, 
+                "device_connected": True,
+                "mode": active_mode
+            })
             
+            await asyncio.sleep(0.1)
+            await stream_audio_to_glasses("I am listening.")
+            return # Stop here, wait for the NEXT audio chunk for the command
+
+        # Issue Command
+        if is_glasses_awake:
+            cmd_payload = voice_engine.parse_command(text)
+            if cmd_payload:
+                # EXECUTE FIRST
+                await _handle_dashboard_command(websocket, cmd_payload)
+                
+                # Close HUD after command starts
+                is_glasses_awake = False
+
+                # THEN tell the frontend to close the HUD silently
+                await _broadcast({
+                    "type": "status", 
+                    "is_awake": False,  # This triggers goToSleep(true) in the fix above
+                    "device_connected": True, 
+                    "mode": active_mode
+                })
+
     except Exception as e:
-        if edge_device_ws == websocket:
-            edge_device_ws = None
-            latest_frame = None
-            if global_ai_task: global_ai_task.cancel() 
-            print(f"[ERROR] ESP32 Connection Lost: {e}")
-            
-            # NEW FIX: Announce disconnection out loud
-            disconn_msg = "Hardware connection lost. Navigation paused." if active_mode == "NAVIGATION" else "Hardware connection lost."
-            await _broadcast({"type": "status", "device_connected": False, "mode": active_mode, "log": "CRITICAL: Connection Lost.", "instruction": disconn_msg})
+        print(f"[VOICE ERROR] {e}")
 
 
 async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) -> None:
@@ -517,11 +569,22 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
 
     if command == "FULL_OCR":
         active_mode = "OCR"
+        # 1. Immediate UI Feedback: Let caretaker know OCR is running
+        await _broadcast({
+            "type": "log", 
+            "log": "VOICE: Starting Full OCR Scan...", 
+            "instruction": "Running OCR...",
+            "mode": active_mode
+        })
+        
         if latest_frame is None:
-            await websocket.send_text(json.dumps({"type": "log", "log": "OCR: No frame available yet.", "mode": active_mode}))
+            await stream_audio_to_glasses("No camera frame available.")
             return
+
+        # Run the actual heavy OCR analysis
         annotated_img, text, kws = await asyncio.to_thread(recognize_character.analyze_text, latest_frame.copy())
         
+        # 2. Update the video feed with OCR bounding boxes
         global latest_jpeg_bytes, latest_frame_seq
         encoded_bytes = await asyncio.to_thread(_encode_video_frame, annotated_img)
         if encoded_bytes:
@@ -530,18 +593,27 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
             new_frame_event.set()
             
         if not text:
-            await stream_audio_to_glasses("No readable text detected.")
-            await websocket.send_text(json.dumps({"type": "log", "log": "OCR: No readable text detected.", "mode": active_mode, "instruction": "No readable text detected."}))
-            return
-        payload = {
-            "type": "log",
-            "log": f"OCR RESULT: {text[:240]}",
-            "instruction": text[:240],
-            "mode": active_mode,
-            "ocr_keywords": [k.upper() for k in kws],
-        }
-        await stream_audio_to_glasses(text[:240])
-        await _broadcast(payload)
+            # 3a. Handle Failure: Send as instruction so HUD shows the error
+            msg = "No readable text detected."
+            await stream_audio_to_glasses(msg)
+            await _broadcast({
+                "type": "log", 
+                "log": f"OCR: {msg}", 
+                "instruction": msg, # HUD pop-up
+                "mode": active_mode
+            })
+        else:
+            # 3b. Handle Success: Send result via Speaker and Dashboard HUD
+            result_text = text[:240]
+            await stream_audio_to_glasses(result_text)
+            await _broadcast({
+                "type": "log",
+                "log": f"OCR RESULT: {result_text}",
+                "instruction": result_text, # THIS triggers the frontend voice/HUD
+                "mode": active_mode
+            })
+        
+        # Reset mode back to normal after a short delay
         active_mode = "NORMAL"
         return
 
@@ -690,8 +762,23 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
             await _broadcast({"type": "log", "log": msg, "instruction": msg, "mode": active_mode})
         return
 
+    if command == "INVALID_SEARCH":
+        msg = "Please specify which tool to find."
+        await stream_audio_to_glasses(msg)
+        await _broadcast({
+            "type": "log", 
+            "log": "VOICE: Tool search was empty.", 
+            "instruction": msg,
+            "mode": active_mode,
+            "is_awake": True
+        })
+        return
+
     if command == "DASHBOARD_WAKE":
-        dashboard_awake = data.get("state", False)
+        global is_glasses_awake
+        awake_state = data.get("state", False)
+        is_glasses_awake = awake_state # Sync the variable
+        print(f"[SYNC] Hardware Mic Wake State set to: {is_glasses_awake}")
         return
 
     await websocket.send_text(json.dumps({"type": "log", "log": f"Unknown command: {command}", "mode": active_mode}))

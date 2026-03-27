@@ -13,7 +13,7 @@ const char* password = "Kailun2003";
 // ==========================================
 // 2. WebSocket Configuration
 // ==========================================
-const char* ws_host = "handled-pts-vary-hiv.trycloudflare.com";
+const char* ws_host = "dodge-designers-sitemap-spatial.trycloudflare.com";
 const int ws_port = 443; 
 const char* ws_url = "/ws";
 
@@ -42,10 +42,10 @@ WebSocketsClient webSocket;
 // ==========================================
 // 4. AUDIO PIN DEFINITIONS
 // ==========================================
-#define I2S_BCLK       41
-#define I2S_LRC        40
-#define I2S_DOUT       42
-#define MIC_IN_PIN     1
+#define I2S_BCLK    41
+#define I2S_LRC     40
+#define I2S_DOUT    42
+#define I2S_MIC_SD  1
 
 // ==========================================
 // 5. GPS PIN DEFINITIONS
@@ -67,38 +67,38 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       break;
     case WStype_BIN:
       size_t bytes_written;
-      i2s_write(I2S_NUM_0, payload, length, &bytes_written, pdMS_TO_TICKS(10));
+      i2s_write(I2S_NUM_0, payload, length, &bytes_written, portMAX_DELAY);
       break;
   }
 }
 
-// Function to initialize the MAX98357 Speaker
-void initSpeaker() {
+// Function to initialize the audio (both mic and speaker)
+void initAudio() {
   i2s_config_t i2s_config = {
-    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+    // Enable both TX (Speaker) and RX (Mic)
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX), 
     .sample_rate = 22050,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
     .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
     .communication_format = I2S_COMM_FORMAT_STAND_I2S,
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = 8,
-    .dma_buf_len = 1024,
+    .dma_buf_len = 512,
     .use_apll = false,
-    .tx_desc_auto_clear = true,
-    .fixed_mclk = 0
+    .tx_desc_auto_clear = true
   };
 
   i2s_pin_config_t pin_config = {
     .bck_io_num = I2S_BCLK,
     .ws_io_num = I2S_LRC,
     .data_out_num = I2S_DOUT,
-    .data_in_num = I2S_PIN_NO_CHANGE
+    .data_in_num = I2S_MIC_SD
   };
 
   i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
   i2s_set_pin(I2S_NUM_0, &pin_config);
   i2s_zero_dma_buffer(I2S_NUM_0);
-  Serial.println("[INFO] MAX98357 Speaker Initialized.");
+  Serial.println("[SUCCESS] Full-Duplex Audio Pipeline Online.");
 }
 
 void setup() {
@@ -106,12 +106,8 @@ void setup() {
   Serial.setDebugOutput(false);
   Serial.println("\n--- OUTDOOR EDGE DEVICE START ---");
 
-  // Initialize Microphone Pin
-  pinMode(MIC_IN_PIN, INPUT);
-  Serial.println("[INFO] MAX4466 Microphone Ready.");
-
   // Initialize Speaker
-  initSpeaker();
+  initAudio();
 
   // Initialize GPS Serial Communication
   gpsSerial.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
@@ -181,11 +177,37 @@ unsigned long last_transmission = 0;
 const int TARGET_FPS = 15; 
 const int FRAME_DELAY = 1000 / TARGET_FPS; 
 
+// digital volume knob
+const float MIC_GAIN = 5.0;
+
 void loop() {
   webSocket.loop();
-
   unsigned long current_time = millis();
   
+  // Audio Capture & Uplink
+  int16_t mic_samples[256];
+  size_t bytes_read = 0;
+  // Non-blocking read from mic
+  i2s_read(I2S_NUM_0, &mic_samples, sizeof(mic_samples), &bytes_read, 0); 
+  
+  if (bytes_read > 0) {
+    int num_samples = bytes_read / 2; // 16-bit audio = 2 bytes per sample
+
+    // Apply Digital Amplification
+    for (int i = 0; i < num_samples; i++) {
+      int32_t amplified = mic_samples[i] * MIC_GAIN;
+
+      // Anti-Distortion (Clipping limits)
+      if (amplified > 32767) amplified = 32767;
+      if (amplified < -32768) amplified = -32768;
+
+      mic_samples[i] = (int16_t)amplified;
+    }
+
+    // Send amplified audio bytes to server
+    webSocket.sendBIN((uint8_t*)mic_samples, bytes_read);
+  }
+
   // Read GPS Data constantly in the background
   while (gpsSerial.available() > 0) {
     gps.encode(gpsSerial.read());
@@ -202,37 +224,36 @@ void loop() {
   }
 
   // Send GPS Data every 2 seconds
-  if (current_time - last_gps_time > 2000) {
+  // if (current_time - last_gps_time > 2000) {
       
-      // We use static variables to remember the count from 2 seconds ago
-      static uint32_t last_chars_processed = 0;
-      uint32_t current_chars = gps.charsProcessed();
+  //     // We use static variables to remember the count from 2 seconds ago
+  //     static uint32_t last_chars_processed = 0;
+  //     uint32_t current_chars = gps.charsProcessed();
 
-      // DIAGNOSTIC 1: Is the wire actually plugged in right now?
-      if (current_chars == last_chars_processed) {
-          // Serial.println("[GPS CRITICAL] WIRE DISCONNECTED! No new data flowing to ESP32.");
-      } 
-      // DIAGNOSTIC 2: The wire is plugged in, but is it backward?
-      else if (gps.passedChecksum() == 0) {
-          // Serial.println("[GPS ERROR] Receiving garbage noise. Swap TX and RX wires!");
-      }
-      // DIAGNOSTIC 3: Wiring is perfect, waiting on space.
-      else if (!gps.location.isValid()) {
-          // Serial.print("[GPS STATUS] Wiring PERFECT. Searching the sky... Satellites: ");
-          // Serial.println(gps.satellites.value());
-      } 
-      // DIAGNOSTIC 4: Success!
-      else {
-          char jsonPayload[100];
-          snprintf(jsonPayload, sizeof(jsonPayload), "{\"type\":\"gps\", \"lat\":%.6f, \"lon\":%.6f}", gps.location.lat(), gps.location.lng());
-          webSocket.sendTXT(jsonPayload);
-          // Serial.println("[GPS SUCCESS] Coordinates sent to server.");
-      }
+  //     // DIAGNOSTIC 1: Is the wire actually plugged in right now?
+  //     if (current_chars == last_chars_processed) {
+  //         Serial.println("[GPS CRITICAL] WIRE DISCONNECTED! No new data flowing to ESP32.");
+  //     } 
+  //     // DIAGNOSTIC 2: The wire is plugged in, but is it backward?
+  //     else if (gps.passedChecksum() == 0) {
+  //         Serial.println("[GPS ERROR] Receiving garbage noise. Swap TX and RX wires!");
+  //     }
+  //     // DIAGNOSTIC 3: Wiring is perfect, waiting on space.
+  //     else if (!gps.location.isValid()) {
+  //         Serial.print("[GPS STATUS] Wiring PERFECT. Searching the sky... Satellites: ");
+  //         Serial.println(gps.satellites.value());
+  //     } 
+  //     // DIAGNOSTIC 4: Success!
+  //     else {
+  //         char jsonPayload[100];
+  //         snprintf(jsonPayload, sizeof(jsonPayload), "{\"type\":\"gps\", \"lat\":%.6f, \"lon\":%.6f}", gps.location.lat(), gps.location.lng());
+  //         webSocket.sendTXT(jsonPayload);
+  //         Serial.println("[GPS SUCCESS] Coordinates sent to server.");
+  //     }
       
-      last_chars_processed = current_chars;
-      last_gps_time = current_time;
-  }
+  //     last_chars_processed = current_chars;
+  //     last_gps_time = current_time;
+  // }
 
-  // CRITICAL FOR STABILITY: Gives the WiFi modem time to clear its queue
-  delay(10); 
+  delay(1); 
 }

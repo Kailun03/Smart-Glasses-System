@@ -64,19 +64,26 @@ function VisionDashboard({ onNavigate }) {
     resetSleepTimer();
   };
 
-  const goToSleep = () => {
+  const goToSleep = (isSilent = false) => {
     setIsAwake(false);
     isAwakeRef.current = false;
-    sendCommand({ command: "DASHBOARD_WAKE", state: false }); // Tell server to resume
+    
+    // ONLY speak if not told to be silent
+    if (!isSilent && !window.speechSynthesis.speaking) {
+      speakInstruction("Listener went back to sleep.");
+    }
+
+    sendCommand({ command: "DASHBOARD_WAKE", state: false });
     if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
   };
 
+  // Update the timer to call it NORMALLY (with the sound)
   const resetSleepTimer = () => {
     if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
     sleepTimerRef.current = setTimeout(() => {
-      goToSleep();
+      goToSleep(false); // Idle timeout -> Play sound
       setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: "INFO: Listener went back to sleep.", type: "info" }]);
-    }, 6000); // 6 second active window
+    }, 6000);
   };
 
   // SPEECH-TO-TEXT (VOICE COMMANDS) ENGINE
@@ -109,16 +116,16 @@ function VisionDashboard({ onNavigate }) {
           sendCommand({ command: "FULL_OCR" });
           goToSleep();
         } 
-        else if (transcript.includes("search for") || transcript.includes("find")) {
-          // Extract everything after "tool"
-          const match = transcript.match(/(?:search for|find )\s+(.+)/);
-          if (match && match[1]) {
-            const requestedTool = match[1].trim();
-            sendCommand({ command: "SEARCH_TOOL", target_tool: requestedTool });
+        else if (transcript.includes("search for")) {
+          const tool = transcript.split("search for")[1]?.trim();
+          
+          if (tool) {
+            sendCommand({ command: "SEARCH_TOOL", target_tool: tool });
+            goToSleep();
           } else {
              speakInstruction("Please specify which tool to find.");
+             resetSleepTimer(); 
           }
-          goToSleep();
         } 
         else if (transcript.includes("stop searching") || transcript.includes("cancel searching")) {
           window.speechSynthesis.cancel();
@@ -217,6 +224,19 @@ function VisionDashboard({ onNavigate }) {
           
           if (data.type === "status") {
               setDeviceConnected(data.device_connected);
+
+              if (data.is_awake !== undefined) {
+                setIsAwake(data.is_awake);
+                isAwakeRef.current = data.is_awake;
+
+                if (data.is_awake === true) {
+                  resetSleepTimer();
+                  speakInstruction("I'm listening.", true);
+                }
+                if (data.is_awake === false) {
+                  goToSleep(true); 
+              }
+              }
               if (data.location && typeof data.location.lat === "number" && typeof data.location.lon === "number") {
                 setLocation({ lat: data.location.lat, lon: data.location.lon });
               }

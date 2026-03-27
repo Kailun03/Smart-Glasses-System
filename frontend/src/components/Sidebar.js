@@ -63,7 +63,7 @@ function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnaly
           <span style={{ color: '#475569', fontSize: '11px', fontWeight: 'bold', letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '8px', paddingLeft: '8px', opacity: isSidebarExpanded ? 1 : 0, transition: 'opacity 0.2s' }}>
             Main Menu
           </span>
-          <NavButton id="home" icon={LayoutDashboard} label="Control Center" onClick={onNavigateHome} />
+          <NavButton id="home" icon={LayoutDashboard} label="Control Centre" onClick={onNavigateHome} />
           <NavButton id="tools" icon={Database} label="Tool Management" onClick={onNavigateTools} />
           <NavButton id="analytics" icon={ShieldAlert} label="Safety Analytics" onClick={onNavigateAnalytics} />
           <NavButton id="settings" icon={Settings} label="System Settings" onClick={onNavigateHome} />
