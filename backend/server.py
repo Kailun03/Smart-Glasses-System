@@ -13,8 +13,8 @@ import os
 import edge_tts
 from pydub import AudioSegment
 import wave
-import os
 import database
+import io
 from pydantic import BaseModel
 
 # import four core system modules
@@ -81,6 +81,47 @@ audio_playing_lock = asyncio.Lock()
 # Zero-Latency Event Trigger for ultra-smooth video
 new_frame_event = asyncio.Event()
 
+last_frame_received_time = 0
+hardware_watchdog_task = None
+
+
+async def hardware_watchdog():
+    global edge_device_ws, latest_frame, global_ai_task, active_mode
+    
+    while True:
+        await asyncio.sleep(2) # Check every 2 seconds
+        
+        # If there's supposedly a connection, let's verify it
+        if edge_device_ws is not None:
+            time_since_last_frame = time.time() - last_frame_received_time
+            
+            # If 3.5 seconds pass with NO data, the device is dead
+            if time_since_last_frame > 3.5:
+                print(f"[WATCHDOG] ESP32 timed out. No data for {time_since_last_frame:.1f}s.")
+                
+                # 1. Force close the ghost socket
+                try:
+                    await edge_device_ws.close()
+                except:
+                    pass
+                
+                # 2. Clean up variables
+                edge_device_ws = None
+                latest_frame = None
+                if global_ai_task: 
+                    global_ai_task.cancel()
+                    
+                # 3. Alert the Frontend UI
+                disconn_msg = "Hardware connection lost. Navigation paused." if active_mode == "NAVIGATION" else "Hardware connection lost."
+                await _broadcast({
+                    "type": "status", 
+                    "device_connected": False, 
+                    "mode": active_mode, 
+                    "log": "CRITICAL: Connection Lost (Timeout).", 
+                    "instruction": disconn_msg
+                })
+
+
 def _decode_video_frame(raw_bytes: bytes) -> Optional[np.ndarray]:
     np_arr = np.frombuffer(raw_bytes, np.uint8)
     img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -123,35 +164,41 @@ async def _broadcast(payload: Dict[str, Any]) -> None:
             dashboard_connections.remove(dead)
 
 
-def _convert_mp3_to_pcm(mp3_path: str) -> bytes:
-    """Synchronous background worker to decode the MP3 using FFmpeg."""
-    audio = AudioSegment.from_mp3(mp3_path)
-    # This perfectly matches your ESP32's I2S hardware expectations!
-    audio = audio.set_frame_rate(22050).set_channels(1).set_sample_width(2)
-    return audio.raw_data
+tts_pcm_cache = {}
 
 async def generate_speech_pcm(text: str) -> Optional[bytes]:
-    """Converts text into ultra-realistic neural speech PCM binary data."""
+    """Converts text to PCM entirely in RAM (No Disk I/O)."""
     try:
-        temp_mp3 = f"temp_speech_{id(text)}.mp3" # Unique name to prevent overlap
-        
-        # 1. Generate the Neural Speech 
-        # "en-US-ChristopherNeural" is a professional male voice. 
-        # (You can also try "en-US-AriaNeural" for a highly realistic female voice)
+        # Check cache first for instant playback
+        cache_key = text.lower().strip()
+        if cache_key in tts_pcm_cache:
+            return tts_pcm_cache[cache_key]
+
         communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
-        await communicate.save(temp_mp3)
         
-        # 2. Run the heavy FFmpeg decoding in a background thread so video doesn't freeze!
-        pcm_data = await asyncio.to_thread(_convert_mp3_to_pcm, temp_mp3)
-        
-        # 3. Clean up the temp file
-        if os.path.exists(temp_mp3):
-            os.remove(temp_mp3)
+        # 1. Download directly into RAM (Bytearray)
+        mp3_bytes = bytearray()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                mp3_bytes.extend(chunk["data"])
+                
+        # 2. Convert MP3 to PCM using an in-memory buffer
+        def decode_in_memory():
+            audio = AudioSegment.from_file(io.BytesIO(mp3_bytes), format="mp3")
+            audio = audio.set_frame_rate(22050).set_channels(1).set_sample_width(2)
+            return audio.raw_data
             
+        # Run conversion in background thread
+        pcm_data = await asyncio.to_thread(decode_in_memory)
+        
+        # Save to cache for next time!
+        tts_pcm_cache[cache_key] = pcm_data
+        
         return pcm_data
     except Exception as e:
-        print(f"[ERROR] Failed to generate Premium TTS audio: {e}")
+        print(f"[ERROR] TTS Generation failed: {e}")
         return None
+
 
 async def _process_and_stream_audio(text: str):
     if not text: return
@@ -421,7 +468,7 @@ async def background_ai_worker():
 
 @app.websocket("/ws")
 async def edge_endpoint(websocket: WebSocket):
-    global latest_frame, edge_device_ws, raw_frame_buffer, global_ai_task
+    global latest_frame, edge_device_ws, raw_frame_buffer, global_ai_task, last_frame_received_time, hardware_watchdog_task
     
     if global_ai_task is not None:
         global_ai_task.cancel()
@@ -430,7 +477,11 @@ async def edge_endpoint(websocket: WebSocket):
     edge_device_ws = websocket
     print("[SUCCESS] ESP32 Edge Device Connected!")
     
-    # Notify dashboard immediately that hardware is SYNCED
+    # 1. Start/Reset the Watchdog
+    last_frame_received_time = time.time()
+    if hardware_watchdog_task is None or hardware_watchdog_task.done():
+        hardware_watchdog_task = asyncio.create_task(hardware_watchdog())
+
     await _broadcast({"type": "status", "device_connected": True, "mode": active_mode, "log": "SUCCESS: ESP32 Connected."})
 
     global_ai_task = asyncio.create_task(background_ai_worker())
@@ -438,6 +489,9 @@ async def edge_endpoint(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive()
+            
+            # 2. Pet the Watchdog (We are receiving data!)
+            last_frame_received_time = time.time()
             
             if "bytes" in data:
                 raw_bytes = data["bytes"]
@@ -522,6 +576,20 @@ async def process_voice_in_background(audio_data, websocket):
                     "is_awake": False,  # This triggers goToSleep(true) in the fix above
                     "device_connected": True, 
                     "mode": active_mode
+                })
+
+            else:
+                # Handle unrecognized commands like the Frontend does! ---
+                msg = "Sorry, I don't understand your command. Please try again."
+                await stream_audio_to_glasses(msg)
+                
+                # Tell frontend to keep the listening bar active and reset the timer
+                await _broadcast({
+                    "type": "log", 
+                    "log": f"VOICE UNRECOGNIZED: {text}", 
+                    "instruction": msg, 
+                    "mode": active_mode,
+                    "is_awake": True
                 })
 
     except Exception as e:
@@ -777,6 +845,10 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
     if command == "DASHBOARD_WAKE":
         global is_glasses_awake
         awake_state = data.get("state", False)
+
+        if is_glasses_awake and not awake_state:
+            await stream_audio_to_glasses("Listener went back to sleep.")
+            
         is_glasses_awake = awake_state # Sync the variable
         print(f"[SYNC] Hardware Mic Wake State set to: {is_glasses_awake}")
         return
