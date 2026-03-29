@@ -461,7 +461,7 @@ async def process_voice_in_background(audio_data, websocket):
         print(f"[VOICE] Heard: '{text}'")
         
         # Removed "hey" and "wake up" to prevent accidental triggers from normal conversation.
-        wake_words = ["hey glasses", "play glasses", "okay glasses", "hey glass", "play glass", "okay glass"]
+        wake_words = ["glasses", "hey", "hey glasses", "play glasses", "okay glasses", "hey glass", "play glass", "okay glass"]
         
         just_woke_up = False
         

@@ -60,7 +60,7 @@ function VisionDashboard({ onNavigate }) {
     setIsAwake(true);
     isAwakeRef.current = true;
     sendCommand({ command: "DASHBOARD_WAKE", state: true }); // Tell server to shush
-    speakInstruction("I'm listening.", true); 
+    if (audioEnabled) speakInstruction("I'm listening.", true); 
     resetSleepTimer();
   };
 
@@ -233,7 +233,7 @@ function VisionDashboard({ onNavigate }) {
 
                 if (data.is_awake === true) {
                   resetSleepTimer();
-                  speakInstruction("I'm listening.", true);
+                  if (audioEnabled) speakInstruction("I'm listening.", true);
                 }
                 if (data.is_awake === false) {
                   goToSleep(true); 
