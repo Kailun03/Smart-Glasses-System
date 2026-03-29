@@ -185,6 +185,8 @@ function VisionDashboard({ onNavigate }) {
     setIsListening(newState);
     isListeningRef.current = newState;
 
+    sendCommand({ command: "FRONTEND_MIC_STATE", state: newState });
+
     if (newState) {
       try { recognitionRef.current.start(); } catch(e) {}
       speakInstruction("Voice commands activated.", true);
