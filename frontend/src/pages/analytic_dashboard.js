@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, forwardRef } from 'react';
-import { ShieldAlert, TrendingUp, AlertTriangle, List, RotateCw, Eye, Type, AlignLeft, Calendar, ArrowDownUp, XCircle, ServerCrash } from 'lucide-react';
+import { ShieldAlert, TrendingUp, AlertTriangle, List, RotateCw, Eye, Type, AlignLeft, Calendar, ArrowDownUp, XCircle, ServerCrash, ChevronLeft, ChevronRight } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import { API_BASE_URL } from '../config';
@@ -41,33 +41,41 @@ function AnalyticDashboard() {
   const [isOffline, setIsOffline] = useState(false);
 
   const [filterSource, setFilterSource] = useState('ALL'); 
-  const [filterDate, setFilterDate] = useState(''); // Stores YYYY-MM-DD
+  const [filterDate, setFilterDate] = useState(''); 
   const [sortOrder, setSortOrder] = useState('DESC'); 
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 100;
+
+  // 1. Reset to page 1 whenever filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterSource, filterDate, sortOrder]);
 
   const fetchHazards = useCallback(async () => {
     setLoading(true);
     setIsOffline(false);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/hazards`);
+      // Fetch a large chunk of data (e.g., 5000 items) from backend for accurate analytics
+      const response = await fetch(`${API_BASE_URL}/api/hazards?limit=5000`);
       if (!response.ok) throw new Error("Network response was not ok");
 
-      const data = await response.json();
-      if (Array.isArray(data)) {
-        const processedData = data.map(h => {
-          const rawType = h.hazard_type || "UNKNOWN";
-          const isSign = rawType.startsWith("SIGN:");
-          return {
-            ...h,
-            source: isSign ? 'OCR' : 'YOLO',
-            cleanName: isSign ? rawType.replace("SIGN:", "").trim() : rawType.split(" at ")[0].trim(),
-            localDate: new Date(h.timestamp).toLocaleDateString('en-CA') 
-          };
-        });
-        setHazards(processedData);
-      } else {
-        setHazards([]); 
-      }
+      const result = await response.json(); 
+      // Handle both raw array OR {data: [...]} object structures seamlessly
+      const dataArray = Array.isArray(result) ? result : (result.data || []);
+      
+      const processedData = dataArray.map(h => {
+        const rawType = h.hazard_type || "UNKNOWN";
+        const isSign = rawType.startsWith("SIGN:");
+        return {
+          ...h,
+          source: isSign ? 'OCR' : 'YOLO',
+          cleanName: isSign ? rawType.replace("SIGN:", "").trim() : rawType.split(" at ")[0].trim(),
+          localDate: new Date(h.timestamp).toLocaleDateString('en-CA') 
+        };
+      });
+      setHazards(processedData);
     } catch (err) {
       console.error("Failed to load hazard analytics:", err);
       setHazards([]);
@@ -81,6 +89,7 @@ function AnalyticDashboard() {
     fetchHazards();
   }, [fetchHazards]);
 
+  // 2. Filter the ENTIRE dataset based on user controls
   const filteredAndSortedHazards = useMemo(() => {
     return hazards
       .filter(h => filterSource === 'ALL' || h.source === filterSource)
@@ -92,7 +101,15 @@ function AnalyticDashboard() {
       });
   }, [hazards, filterSource, filterDate, sortOrder]);
 
+  // 3. Slice the filtered dataset to ONLY 100 items for the DOM
+  const paginatedHazards = useMemo(() => {
+    const startIndex = (currentPage - 1) * PAGE_SIZE;
+    return filteredAndSortedHazards.slice(startIndex, startIndex + PAGE_SIZE);
+  }, [filteredAndSortedHazards, currentPage]);
+
+  // 4. Analytics are calculated based on the FULL filtered dataset
   const totalIncidents = filteredAndSortedHazards.length;
+  const totalPages = Math.ceil(totalIncidents / PAGE_SIZE) || 1;
   const physicalHazards = filteredAndSortedHazards.filter(h => h.source === 'YOLO');
   const ocrSigns = filteredAndSortedHazards.filter(h => h.source === 'OCR');
   const criticalCount = filteredAndSortedHazards.filter(h => h.severity === 'CRITICAL').length;
@@ -128,6 +145,7 @@ function AnalyticDashboard() {
     setFilterSource('ALL');
     setFilterDate('');
     setSortOrder('DESC');
+    setCurrentPage(1);
   };
 
   const isFiltering = filterSource !== 'ALL' || filterDate !== '';
@@ -195,15 +213,12 @@ function AnalyticDashboard() {
           font-size: 1.2rem !important; 
           padding-bottom: 8px;
         }
-        .custom-dark-calendar .react-datepicker__day-name { 
-          color: #f8fafc !important; 
-          font-weight: 600 !important; 
-        }
+        .custom-dark-calendar .react-datepicker__day-name { color: #f8fafc !important; font-weight: 600 !important; }
         .custom-dark-calendar .react-datepicker__day { color: #94a3b8 !important; border-radius: 6px !important; transition: 0.2s; }
         .custom-dark-calendar .react-datepicker__day:hover { background-color: rgba(255,255,255,0.1) !important; color: #f8fafc !important; }
         .custom-dark-calendar .react-datepicker__day--selected { background-color: #a855f7 !important; color: #fff !important; font-weight: bold; }
         .custom-dark-calendar .react-datepicker__day--keyboard-selected { background-color: rgba(168, 85, 247, 0.4) !important; }
-        .custom-dark-calendar .react-datepicker__triangle { display: none !important; } /* Hides the ugly arrow pointing up */
+        .custom-dark-calendar .react-datepicker__triangle { display: none !important; } 
         .custom-dark-calendar .react-datepicker__navigation-icon::before { border-color: #94a3b8 !important; }
         .custom-dark-calendar .react-datepicker__navigation:hover *::before { border-color: #f8fafc !important; }
 
@@ -249,12 +264,49 @@ function AnalyticDashboard() {
           display: flex;
           align-items: center;
           gap: 16px;
+        }
 
-        /* Responsive tweak */
         @media (max-width: 800px) {
           .dashboard-header { flex-direction: column; align-items: flex-start; gap: 20px; }
           .header-actions { width: 100%; justify-content: space-between; }
+        }
 
+        .pagination-container {
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          gap: 20px;
+          padding: 20px;
+          background-color: rgba(0,0,0,0.2);
+          border-top: 1px solid rgba(255,255,255,0.05);
+        }
+        .page-info {
+          font-size: 13px;
+          color: #94a3b8;
+          font-weight: 600;
+        }
+        .page-btn {
+          background: #1e293b;
+          border: 1px solid rgba(255,255,255,0.1);
+          color: #f8fafc;
+          padding: 8px 16px;
+          border-radius: 8px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 12px;
+          transition: all 0.2s;
+        }
+        .page-btn:hover:not(:disabled) {
+          background: #334155;
+          border-color: #38bdf8;
+          color: #38bdf8;
+        }
+        .page-btn:disabled {
+          opacity: 0.3;
+          cursor: not-allowed;
+        }
       `}</style>
 
       {/* HEADER */}
@@ -315,7 +367,7 @@ function AnalyticDashboard() {
 
       <div className="main-content-grid">
         
-        <div className="widget-card animate-slide-up" style={{ minHeight: '500px', animationDelay: '0.4s', overflow: 'hidden' }}>
+        <div className="widget-card animate-slide-up" style={{ minHeight: '500px', animationDelay: '0.4s', overflow: 'hidden', padding: 0 }}>
           
           <div style={{ padding: '24px', display: 'flex', alignItems: 'center', gap: '12px', backgroundColor: 'rgba(0,0,0,0.2)' }}>
             <List size={20} color="#38bdf8" />
@@ -383,13 +435,13 @@ function AnalyticDashboard() {
                 <ServerCrash size={32} opacity={0.8} />
                 Cannot connect to host server. Please verify backend is running.
               </div>
-            ) : filteredAndSortedHazards.length === 0 ? (
+            ) : paginatedHazards.length === 0 ? (
               <div style={{ padding: '60px 20px', textAlign: 'center', color: '#64748b', fontSize: '14px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
                 <ShieldAlert size={32} opacity={0.5} />
                 {isFiltering ? "No logs match your current filters." : "No logs found in Supabase. Coast is clear!"}
               </div>
             ) : (
-              filteredAndSortedHazards.map((h) => (
+              paginatedHazards.map((h) => (
                 <div key={h.id} className="hazard-row">
                   <span>
                     {h.source === 'YOLO' 
@@ -409,6 +461,31 @@ function AnalyticDashboard() {
               ))
             )}
           </div>
+
+          {/* Render pagination only if there are items */}
+          {totalIncidents > 0 && (
+            <div className="pagination-container">
+              <button 
+                className="page-btn" 
+                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                disabled={currentPage === 1 || isLoading}
+              >
+                <ChevronLeft size={16} /> Previous
+              </button>
+              
+              <div className="page-info">
+                Page {currentPage} of {totalPages}
+              </div>
+              
+              <button 
+                className="page-btn" 
+                onClick={() => setCurrentPage(prev => prev + 1)}
+                disabled={currentPage >= totalPages || isLoading}
+              >
+                Next <ChevronRight size={16} />
+              </button>
+            </div>
+          )}
         </div>
 
         {/* RIGHT: DUAL CHARTS SIDEBAR */}

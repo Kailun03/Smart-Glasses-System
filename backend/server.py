@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import asyncio
@@ -16,6 +16,8 @@ import wave
 import database
 import io
 from pydantic import BaseModel
+from typing import List
+import shutil
 
 # import four core system modules
 import hazard_detection as detect_hazard
@@ -24,6 +26,7 @@ import ocr as recognize_character
 import tool_recognition as recognize_tool
 import gps_navigation as gps
 from voice_processor import VoiceCommandEngine
+import auto_trainer
 
 app = FastAPI()
 
@@ -87,6 +90,48 @@ is_glasses_awake = False
 hardware_wake_timer = 0       # Tracks how long the hardware has been awake
 accumulated_command = ""      # Stitches fragmented sentences together
 is_processing_audio = False   # Mutex to prevent sleeping while Google is translating
+
+training_queue = asyncio.Queue()
+
+@app.on_event("startup")
+async def startup_event():
+    """Starts the background queue worker when the server boots."""
+    asyncio.create_task(background_training_worker())
+
+async def background_training_worker():
+    """Constantly watches the queue and trains one model at a time."""
+    print("[SYSTEM] Background Training Worker Initialized.")
+    while True:
+        job = await training_queue.get()
+        tool_id = job["tool_id"]
+        
+        # Verify the tool still exists in the database before starting
+        all_tools = await asyncio.to_thread(database.get_all_tools)
+        if not any(t['id'] == tool_id for t in all_tools):
+            print(f"[QUEUE] Skipping Tool {tool_id} (Already deleted by user)")
+            training_queue.task_done()
+            continue
+
+        # Start actual training pipeline
+        tool_name = job["tool_name"]
+        print(f"[QUEUE] Dequeued tool '{tool_name}'. Starting training...")
+        try:
+            import auto_trainer
+            # Run the heavy YOLO training in a separate thread so it doesn't freeze the server
+            await asyncio.to_thread(
+                auto_trainer.run_training_pipeline,
+                tool_id, 
+                tool_name, 
+                job["yolo_class"], 
+                job["saved_paths"], 
+                job["parsed_boxes"]
+            )
+        except Exception as e:
+            print(f"[QUEUE ERROR] Failed to train {tool_name}: {e}")
+        finally:
+            # Mark the job as finished so the queue can move to the next one
+            training_queue.task_done()
+            print(f"[QUEUE] Finished processing '{tool_name}'. Waiting for next job...")
 
 async def hardware_watchdog():
     global edge_device_ws, latest_frame, global_ai_task, active_mode
@@ -239,7 +284,8 @@ async def video_feed():
     return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.get("/api/hazards")
-def api_get_hazards(): return database.get_hazard_history()
+def api_get_hazards(page: int = 1, limit: int = 100):
+    return database.get_hazard_history(page=page, page_size=limit)
 
 @app.get("/api/tools")
 def api_get_tools(): return database.get_all_tools()
@@ -251,10 +297,86 @@ def api_add_tool(tool: ToolData):
     return {"error": "Failed to add tool"}
 
 @app.delete("/api/tools/{tool_id}")
-def api_delete_tool(tool_id: int):
+async def api_delete_tool(tool_id: int):
+    # 1. Signal auto_trainer to stop if it's currently training this ID
+    if tool_id in auto_trainer.active_training_flags:
+        auto_trainer.active_training_flags[tool_id] = True
+        print(f"[API] Issued kill signal for Tool ID {tool_id}")
+
+    # 2. Delete from Database
+    # This automatically "removes" it from the queue because the 
+    # background_training_worker checks the DB before starting.
     success = database.delete_tool(tool_id)
-    if success: return {"message": "Tool deleted successfully"}
+    
+    if success:
+        database.add_notification(f"Tool record and associated training tasks removed.", "info")
+        return {"message": "Tool and training task deleted successfully"}
     return {"error": "Failed to delete tool"}
+
+@app.post("/api/tools/auto_label")
+async def api_auto_label(files: List[UploadFile] = File(...)):
+    import auto_trainer
+    results = []
+    for file in files:
+        contents = await file.read()
+        # Get the OpenCV guess for this image
+        box = auto_trainer.get_opencv_box(contents)
+        results.append({"filename": file.filename, "box": box})
+    return results
+
+@app.post("/api/tools/train")
+async def api_train_new_tool(
+    # Notice we removed BackgroundTasks from here!
+    tool_name: str = Form(...),
+    description: str = Form(""),
+    boxes: str = Form(...), 
+    files: List[UploadFile] = File(...)
+):
+    import database
+    import shutil
+    import os
+
+    # 1. Register tool in database (Default status is automatically "QUEUED")
+    tool_id = database.add_tool(tool_name, description)
+    yolo_class = tool_name.lower().replace(" ", "_")
+
+    # 2. Parse the JSON boxes sent from React
+    parsed_boxes = json.loads(boxes)
+
+    # 3. Save uploaded files temporarily
+    temp_dir = f"temp_uploads_{tool_id}"
+    os.makedirs(temp_dir, exist_ok=True)
+    saved_paths = []
+    
+    for file in files:
+        file_path = os.path.join(temp_dir, file.filename)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        saved_paths.append(file_path)
+
+    # 4. Add the job to our strict FIFO Queue!
+    await training_queue.put({
+        "tool_id": tool_id,
+        "tool_name": tool_name,
+        "yolo_class": yolo_class,
+        "saved_paths": saved_paths,
+        "parsed_boxes": parsed_boxes
+    })
+    
+    # 5. Send a notification to the UI
+    database.add_notification(f"'{tool_name}' added to the training queue. [ Position: {training_queue.qsize()} ]", "info")
+    
+    return {"status": "success", "tool_id": tool_id}
+
+@app.get("/api/notifications")
+def api_get_notifications(limit: int = 20, offset: int = 0):
+    return database.get_notifications(limit=limit, offset=offset)
+
+@app.put("/api/notifications/read")
+def api_mark_notifications_read():
+    import database
+    database.mark_notifications_read()
+    return {"status": "success"}
 
 @app.websocket("/ws/dashboard")
 async def dashboard_endpoint(websocket: WebSocket):
@@ -300,7 +422,7 @@ async def background_ai_worker():
                 latest_frame = processed_img
 
                 if active_mode in ["TOOL", "GUIDANCE"]:
-                    img, tools, guidance_instruction = await asyncio.to_thread(recognize_tool.analyze_tools, latest_frame, target_tool_name, 0.35, cached_tool_map)
+                    img, tools, guidance_instruction = await asyncio.to_thread(recognize_tool.analyze_tools, latest_frame, target_tool_name, cached_tool_map)
                     latest_frame = img 
 
                     if active_mode == "TOOL":
@@ -574,10 +696,10 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
         await stream_audio_to_glasses(msg); await _broadcast({"type": "log", "log": msg, "instruction": msg, "mode": active_mode})
         db_tools = await asyncio.to_thread(database.get_all_tools)
         global cached_tool_map
-        cached_tool_map = {t["yolo_class"].lower(): t["name"] for t in db_tools}
+        cached_tool_map = {t["tool_name"].lower().replace(" ", "_"):t["tool_name"] for t in db_tools}
         msg = "Scanning area..."
         await stream_audio_to_glasses(msg); await _broadcast({"type": "log", "log": msg, "instruction": msg, "mode": active_mode})
-        annotated_img, tools, guidance_text = await asyncio.to_thread(recognize_tool.analyze_tools, latest_frame.copy(), None, 0.35, cached_tool_map)
+        annotated_img, tools, guidance_text = await asyncio.to_thread(recognize_tool.analyze_tools, latest_frame.copy(), None, cached_tool_map)
         encoded_bytes = await asyncio.to_thread(_encode_video_frame, annotated_img)
         if encoded_bytes:
             latest_jpeg_bytes = encoded_bytes; latest_frame_seq += 1; new_frame_event.set()
@@ -644,7 +766,7 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
             await stream_audio_to_glasses(msg)
             await _broadcast({"type": "log", "log": msg, "instruction": msg, "mode": active_mode})
             db_tools = await asyncio.to_thread(database.get_all_tools)
-            cached_tool_map = {t["yolo_class"].lower(): t["name"] for t in db_tools}
+            cached_tool_map = {t["tool_name"].lower().replace(" ", "_"): t["tool_name"] for t in db_tools}
         return
     if command == "SEARCH_STOP":
         if active_mode == "GUIDANCE" or active_mode == "TOOL":

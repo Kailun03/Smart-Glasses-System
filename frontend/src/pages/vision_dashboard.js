@@ -884,18 +884,27 @@ function VisionDashboard({ onNavigate }) {
           </div>
 
           {/* Logs Container */}
-          <div className="custom-log-container" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', paddingRight: '4px' }}>
-            {logs.map((log, index) => (
-              <div key={index} style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                <Glasses size={14} color="#475569" style={{ flexShrink: 0 }} />
-                <div style={{ backgroundColor: 'rgba(255, 255, 255, 0.04)', borderRadius: '8px', padding: '8px 12px', flex: 1, borderLeft: `3px solid ${log.type === 'alert' ? '#ef4444' : log.type === 'error' ? '#f59e0b' : log.type === 'info' ? '#38bdf8' : '#22c55e'}`, fontSize: '11px', color: '#cbd5e1', lineHeight: '1.4' }}>
-                  <span style={{ color: '#64748b', fontSize: '10px', display: 'block', marginBottom: '2px' }}>{log.time}</span>
-                  <span style={{ wordBreak: 'break-word' }}>{log.text}</span>
-                </div>
+          {logs.length === 0 ? (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 20px', color: '#64748b', gap: '12px' }}>
+              <Activity size={32} style={{ opacity: 0.3 }} />
+              <div style={{ textAlign: 'center' }}>
+                <span style={{ fontSize: '13px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>No System Logs</span>
               </div>
-            ))}
-            <div ref={logsEndRef} />
-          </div>
+            </div>
+          ) : (
+            <div className="custom-log-container" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px', paddingRight: '4px' }}>
+              {logs.map((log, index) => (
+                <div key={index} style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                  <Glasses size={14} color="#475569" style={{ flexShrink: 0 }} />
+                  <div style={{ backgroundColor: 'rgba(255, 255, 255, 0.04)', borderRadius: '8px', padding: '8px 12px', flex: 1, borderLeft: `3px solid ${log.type === 'alert' ? '#ef4444' : log.type === 'error' ? '#f59e0b' : log.type === 'info' ? '#38bdf8' : '#22c55e'}`, fontSize: '11px', color: '#cbd5e1', lineHeight: '1.4' }}>
+                    <span style={{ color: '#64748b', fontSize: '10px', display: 'block', marginBottom: '2px' }}>{log.time}</span>
+                    <span style={{ wordBreak: 'break-word' }}>{log.text}</span>
+                  </div>
+                </div>
+              ))}
+              <div ref={logsEndRef} />
+            </div>
+          )}
 
         </div>
       </div>

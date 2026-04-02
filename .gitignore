@@ -15,3 +15,9 @@ node_modules/
 
 # MacOS junk
 .DS_Store
+
+# temp folder
+temp_uploads_*
+SGS_Updates
+custom_datasets
+custom_tools_v1.pt

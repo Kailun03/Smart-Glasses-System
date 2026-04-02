@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Loader2 } from 'lucide-react';
 import VisionDashboard from './pages/vision_dashboard';
 import MainDashboard from './pages/main_dashboard';
@@ -7,18 +7,43 @@ import AnalyticDashboard from './pages/analytic_dashboard'; // Corrected spellin
 import Sidebar from './components/Sidebar';
 
 function App() {
-  const [currentPage, setCurrentPage] = useState('home');
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
+
+  const getInitialPage = () => {
+    const hashMatch = window.location.hash.match(/#([^#]+)$/);
+    const page = hashMatch ? hashMatch[1] : 'home';
+    
+    if (window.location.pathname !== '/' || window.location.hash !== `#${page}`) {
+      window.history.replaceState(null, '', `/#${page}`);
+    }
+    
+    return page;
+  };
+
+  const [currentPage, setCurrentPage] = useState(getInitialPage());
 
   const handleNavigation = (targetPage, message) => {
     setLoadingMessage(message);
     setIsTransitioning(true);
+    
     setTimeout(() => {
       setCurrentPage(targetPage);
+      window.location.hash = targetPage; 
       setIsTransitioning(false);
     }, 800); 
   };
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.replace('#', '');
+      setCurrentPage(hash || 'home');
+    };
+    
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
 
   // Check if we are in vision mode to hide the sidebar and remove padding
   const isVisionMode = currentPage === 'vision';

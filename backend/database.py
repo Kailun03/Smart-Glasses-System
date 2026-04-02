@@ -1,4 +1,3 @@
-# backend/database.py
 import os
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -15,38 +14,41 @@ if not url or not key:
 supabase: Client = create_client(url, key)
 print("[DATABASE] Successfully connected to Supabase Cloud PostgreSQL.")
 
-def get_all_tools():
-    """Fetches all registered tools from the Supabase cloud."""
-    try:
-        response = supabase.table("tools").select("*").execute()
-        # response.data is a list of dictionaries directly from the cloud
-        return [{"id": r["id"], "name": r["friendly_name"], "yolo_class": r["yolo_class"], "description": r["description"]} for r in response.data]
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch tools from Supabase: {e}")
-        return []
+def add_tool(tool_name: str, description: str, status: str = "QUEUED"):
+    """Inserts a new tool into Supabase and returns the ID."""
+    data = {
+        "tool_name": tool_name,
+        "description": description,
+        "status": status
+    }
+    
+    response = supabase.table("tools").insert(data).execute()
+    
+    if response.data:
+        return response.data[0]["id"]
+    return None
 
-def add_tool(friendly_name: str, yolo_class: str, description: str = ""):
-    """Inserts a new tool into the Supabase cloud."""
+def update_tool_status(tool_id: int, new_status: str):
+    """Updates the training status of a specific tool."""
     try:
-        response = supabase.table("tools").insert({
-            "friendly_name": friendly_name,
-            "yolo_class": yolo_class,
-            "description": description
-        }).execute()
-        # Return the new database ID assigned by PostgreSQL
-        return response.data[0]['id']
+        response = supabase.table("tools").update({"status": new_status}).eq("id", tool_id).execute()
+        return response.data
     except Exception as e:
-        print(f"[ERROR] Failed to add tool to Supabase: {e}")
+        print(f"[DB ERROR] Failed to update status: {e}")
         return None
 
-def delete_tool(tool_id: int):
-    """Deletes a tool from the Supabase cloud."""
+def get_all_tools():
+    """Fetches all registered tools with robust error handling."""
     try:
-        supabase.table("tools").delete().eq("id", tool_id).execute()
-        return True
+        response = supabase.table("tools").select("*").order("id").execute()
+        return response.data
     except Exception as e:
-        print(f"[ERROR] Failed to delete tool from Supabase: {e}")
-        return False
+        print(f"[DATABASE CRITICAL] Supabase connection failed: {e}")
+
+def delete_tool(tool_id: int):
+    """Deletes a tool from the database."""
+    response = supabase.table("tools").delete().eq("id", tool_id).execute()
+    return True if response.data else False
 
 def log_hazard(hazard_type: str, lat: float = None, lon: float = None):
     """Saves a detected hazard event to the Supabase cloud."""
@@ -60,15 +62,54 @@ def log_hazard(hazard_type: str, lat: float = None, lon: float = None):
     except Exception as e:
         print(f"[ERROR] Failed to log hazard: {e}")
 
-def get_hazard_history(limit: int = 10000):
-    """Fetches the most recent hazard events."""
+def get_hazard_history(page: int = 1, page_size: int = 100):
+    """Fetches a specific page of hazards and returns the exact total count."""
     try:
+        start = (page - 1) * page_size
+        end = start + page_size - 1
+        
         response = supabase.table("hazard_logs") \
-            .select("*") \
+            .select("*", count="exact") \
             .order("timestamp", desc=True) \
-            .limit(limit) \
+            .range(start, end) \
             .execute()
-        return response.data
+            
+        return {
+            "data": response.data,
+            "total_count": response.count
+        }
     except Exception as e:
         print(f"[ERROR] Failed to fetch hazard history: {e}")
-        return []
+        return {"data": [], "total_count": 0}
+
+def add_notification(message: str, notif_type: str = "info"):
+    """Pushes a notification to the dashboard."""
+    try:
+        supabase.table("notifications").insert({
+            "message": message,
+            "type": notif_type,
+            "is_read": False
+        }).execute()
+    except Exception as e:
+        print(f"Failed to add notification: {e}")
+
+def get_notifications(limit: int = 20, offset: int = 0):
+    """Fetches notifications with support for 'Load More'."""
+    try:
+        res = supabase.table("notifications") \
+            .select("*", count="exact") \
+            .order("created_at", desc=True) \
+            .range(offset, offset + limit - 1) \
+            .execute()
+        return {
+            "data": res.data,
+            "total_count": res.count
+        }
+    except Exception:
+        return {"data": [], "total_count": 0}
+
+def mark_notifications_read():
+    try:
+        supabase.table("notifications").update({"is_read": True}).eq("is_read", False).execute()
+    except Exception:
+        pass
