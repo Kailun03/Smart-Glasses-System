@@ -4,3 +4,6 @@ numpy
 opencv-python
 ultralytics
 easyocr
+supabase
+PyJWT
+python-dotenv

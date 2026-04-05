@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Shield, LayoutDashboard, Database, Settings, ShieldAlert } from 'lucide-react';
+import { Shield, LayoutDashboard, Database, Settings, ShieldAlert, LogOut } from 'lucide-react';
 import { SYSTEM_VERSION } from '../config';
 
-function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnalytics }) {
+function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnalytics, onLogout }) {
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
 
   const NavButton = ({ id, icon: Icon, label, onClick }) => (
@@ -55,7 +55,7 @@ function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnaly
           <div style={{ backgroundColor: 'rgba(15, 89, 121, 0.5)', padding: '8px', borderRadius: '12px' }}><Shield size={24} color="#38bdf8" /></div>
           <div style={{ opacity: isSidebarExpanded ? 1 : 0 }}>
             <h1 style={{ margin: 0, fontSize: '18px', color: '#f8fafc' }}>AURA Vision</h1>
-            <p style={{ color: '#64748b', fontSize: '12px', marginTop: '8px' }}>Augmented User Reality Assistant</p>
+            <p style={{ color: '#64748b', fontSize: '14px', marginTop: '8px' }}>Augmented User Reality Assistant</p>
           </div>
         </div>
 
@@ -69,7 +69,40 @@ function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnaly
           <NavButton id="settings" icon={Settings} label="System Settings" onClick={onNavigateHome} />
         </div>
 
-        { isSidebarExpanded && <span style={{ color: '#64748b', fontSize: '14px', paddingLeft: '54px' }}>System Version : {SYSTEM_VERSION}</span> }
+        <span style={{ color: '#64748b', fontSize: '14px', paddingLeft: '54px' }}>System Version : {SYSTEM_VERSION}</span>
+        
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid #1e293b', paddingTop: '16px' }}>
+          <button 
+            onClick={onLogout}
+            onMouseOver={(e) => {
+                e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.03)';
+                e.currentTarget.style.color = '#f8fafc';
+            }}
+            onMouseOut={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.color = '#94a3b8';
+            }}
+            style={{ 
+              backgroundColor: 'transparent', 
+              color: '#94a3b8', 
+              border: 'transparent', 
+              padding: '12px 10px', 
+              borderRadius: '10px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '16px', 
+              fontSize: '14px', 
+              fontWeight: '500', 
+              cursor: 'pointer', 
+              textAlign: 'left', 
+              transition: 'all 0.2s',
+              width: '100%'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'center' }}><LogOut size={20} /></div>
+            <span style={{ opacity: isSidebarExpanded ? 1 : 0, transition: 'opacity 0.2s' }}>Secure Logout</span>
+          </button>
+        </div>
       </nav>
     </>
   );

@@ -1,4 +1,5 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, UploadFile, File, Form
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, UploadFile, File, Form, Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import asyncio
@@ -18,6 +19,7 @@ import io
 from pydantic import BaseModel
 from typing import List
 import shutil
+import jwt
 
 # import four core system modules
 import hazard_detection as detect_hazard
@@ -28,8 +30,33 @@ import gps_navigation as gps
 from voice_processor import VoiceCommandEngine
 import auto_trainer
 
-app = FastAPI()
+app = FastAPI(title="AURA Vision API")
 
+security = HTTPBearer()
+
+SUPABASE_JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET")
+
+if not SUPABASE_JWT_SECRET:
+    raise ValueError("FATAL ERROR: SUPABASE_JWT_SECRET is not set in the .env file.")
+
+def verify_supabase_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Verifies the JWT token sent from the React frontend."""
+    token = credentials.credentials
+    try:
+        # Decode the token using the secret from .env
+        payload = jwt.decode(
+            token, 
+            SUPABASE_JWT_SECRET, 
+            algorithms=["HS256"], 
+            audience="authenticated"
+        )
+        return payload["sub"] # Returns the securely verified User ID
+        
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+        
 class ToolData(BaseModel):
     name: str
     yolo_class: str
