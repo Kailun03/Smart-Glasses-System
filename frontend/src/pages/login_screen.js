@@ -13,6 +13,7 @@ export default function LoginScreen({ onSessionComplete }) {
   
   const [isLaunched, setIsLaunched] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
+  const [isFinalizing, setIsFinalizing] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
 
   useEffect(() => {
@@ -28,12 +29,21 @@ export default function LoginScreen({ onSessionComplete }) {
   const isLandscape = windowWidth > 1000;
 
   const triggerCinematicExit = (session) => {
-    const name = session.user.user_metadata?.display_name || 'User';
+    const name = session.user?.user_metadata?.display_name || 'User';
     setFullName(name);
+    
+    // Phase 1: Center the model & text, hide the form
     setIsExiting(true); 
+    
+    // Phase 2: Fly up after 1.8 seconds of displaying the welcome message
+    setTimeout(() => {
+      setIsFinalizing(true);
+    }, 1800); 
+
+    // Phase 3: Actually transition to the next screen after the fly up finishes
     setTimeout(() => {
       onSessionComplete(session);
-    }, 3000); 
+    }, 2200); 
   };
 
   const handleAuth = async (e) => {
@@ -101,10 +111,16 @@ export default function LoginScreen({ onSessionComplete }) {
           textAlign: 'center',
           width: '100%',
           
-          transform: isExiting 
-            ? (isLandscape ? 'translateX(35%)' : 'translateY(15%)') 
-            : 'translateX(0)',
-          transition: 'transform 1.2s cubic-bezier(0.25, 1, 0.5, 1)',
+          // TWO-PHASE ANIMATION LOGIC:
+          transform: isFinalizing 
+            ? (isLandscape ? 'translateX(35%) translateY(-100vh)' : 'translateY(-100vh)') // Fly up!
+            : (isExiting 
+                ? (isLandscape ? 'translateX(35%)' : 'translateY(15%)') // Move to center
+                : 'translateX(0)'), // Initial state
+          opacity: isFinalizing ? 0 : 1, // Fade out while flying up
+          transition: isFinalizing 
+            ? 'transform 0.8s cubic-bezier(0.5, 0, 0.2, 1), opacity 0.6s ease' 
+            : 'transform 1.2s cubic-bezier(0.25, 1, 0.5, 1)',
           position: 'relative'
         }}>
           

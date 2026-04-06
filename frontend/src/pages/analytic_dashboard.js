@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, forwardRef } from 'react';
-import { ShieldAlert, TrendingUp, AlertTriangle, List, RotateCw, Eye, Type, AlignLeft, Calendar, ArrowDownUp, XCircle, ServerCrash, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ShieldAlert, TrendingUp, AlertTriangle, List, RotateCw, Eye, Type, AlignLeft, Calendar, ArrowDownUp, XCircle, ServerCrash, ChevronLeft, ChevronRight, CloudAlert } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import { API_BASE_URL } from '../config';
@@ -247,8 +247,7 @@ function AnalyticDashboard() {
         }
 
         .header-actions { display: flex; align-items: center; gap: 16px; }
-        @media (max-width: 800px) { .dashboard-header { flex-direction: column; align-items: flex-start; gap: 20px; } .header-actions { width: 100%; justify-content: space-between; } }
-
+        
         .pagination-container {
           display: flex; justify-content: center; align-items: center; gap: 24px; padding: 24px;
           background-color: rgba(0,0,0,0.2); border-top: 1px solid rgba(255,255,255,0.05);
@@ -272,9 +271,10 @@ function AnalyticDashboard() {
           <h1 style={{ fontSize: '38px', fontWeight: '900', letterSpacing: '-1.5px', margin: 0, color: '#f8fafc' }}>
             Safety <span style={{ color: '#00E5FF' }}>Intelligence</span>
           </h1>
-          <p style={{ color: '#94a3b8', margin: '8px 0 0 0', fontSize: '15px', fontWeight: '500' }}>
-            Spatial hazards and environmental text warnings.
-          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px', color: '#94a3b8' }}>
+            <CloudAlert size={16} color="#10b981" style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: 'clamp(12px, 2vw, 14px)', fontWeight: '600' }}>Spatial Hazards And Environmental Text Warnings</span>
+          </div>
         </div>
         
         <div className="header-actions">

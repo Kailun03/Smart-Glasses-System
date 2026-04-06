@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { UploadCloud, Trash2, Database, Activity, CheckCircle, Clock, ServerCrash, RotateCw, AlertTriangle, ChevronRight, ChevronLeft, Check, Move, Maximize, Bell, X, Loader2, ShieldCheck } from 'lucide-react';
+import { UploadCloud, Trash2, Database, Activity, CheckCircle, Clock, ServerCrash, RotateCw, AlertTriangle, ChevronRight, ChevronLeft, Move, Maximize, Bell, X, Loader2, Toolbox } from 'lucide-react';
 import { API_BASE_URL } from '../config';
 
 const WidgetCard = ({ title, icon: Icon, children, className = "", delay = "0s", style = {} }) => (
@@ -580,7 +580,10 @@ function ToolManagement() {
       <header className="animate-slide-up" style={{ position: 'relative', zIndex: 50, display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px', flexShrink: 0, animationDelay: '0.1s' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: '32px', color: '#f8fafc', fontWeight: '800', letterSpacing: '-0.5px' }}>Workplace <span style={{ color: '#00E5FF' }}>Intelligence</span></h1>
-          <p style={{ margin: '6px 0 0 0', color: '#94a3b8', fontSize: '15px' }}>Manage custom vision datasets and trained model support.</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px', color: '#94a3b8' }}>
+            <Toolbox size={16} color="#10b981" style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: 'clamp(12px, 2vw, 14px)', fontWeight: '600' }}>Manage Custom Vision Datasets And Trained Model Support</span>
+          </div>
         </div>
         
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
