@@ -98,15 +98,42 @@ def get_user_settings(user_id: str):
     if res.data:
         return res.data[0]
     else:
-        # Create default settings if new user
-        default_data = {"user_id": user_id, "auto_connect": True, "notifications": True}
+        # Create default settings if new user (NOW WITH ALL FIELDS)
+        default_data = {
+            "user_id": user_id, 
+            "auto_connect": True, 
+            "notifications": True,
+            "confidence_threshold": 75,
+            "stream_resolution": "720p",
+            "audio_alerts": True,
+            "session_timeout": "30",
+            "data_retention": "90",
+            "job_title": "Safety Inspector"
+        }
         ins = supabase.table("user_settings").insert(default_data).execute()
         return ins.data[0]
 
-def update_user_settings(user_id: str, auto_connect: bool, notifications: bool):
-    data = {"auto_connect": auto_connect, "notifications": notifications}
-    res = supabase.table("user_settings").update(data).eq("user_id", user_id).execute()
-    if not res.data:
-        data["user_id"] = user_id
-        supabase.table("user_settings").insert(data).execute()
-    return True
+def update_user_settings(user_id: str, settings_data: dict):
+    """Upserts the user's hardware and system preferences."""
+    try:
+        payload = {
+            "user_id": user_id,
+            "auto_connect": settings_data.get("auto_connect", True),
+            "notifications": settings_data.get("notifications", True),
+            "confidence_threshold": settings_data.get("confidence_threshold", 75),
+            "stream_resolution": settings_data.get("stream_resolution", "720p"),
+            "audio_alerts": settings_data.get("audio_alerts", True),
+            "session_timeout": settings_data.get("session_timeout", "30"),
+            "data_retention": settings_data.get("data_retention", "90"),
+            "job_title": settings_data.get("job_title", "Safety Inspector")
+        }
+        
+        # ADDED on_conflict="user_id" HERE
+        response = supabase.table("user_settings") \
+            .upsert(payload, on_conflict="user_id") \
+            .execute()
+            
+        return response.data
+    except Exception as e:
+        print(f"[DB ERROR] Failed to update settings: {e}")
+        raise e

@@ -64,6 +64,12 @@ class ToolData(BaseModel):
 class SettingsUpdate(BaseModel):
     auto_connect: bool
     notifications: bool
+    confidence_threshold: int
+    stream_resolution: str
+    audio_alerts: bool
+    session_timeout: str
+    data_retention: str
+    job_title: str
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -321,7 +327,7 @@ def api_get_settings(user_id: str = Depends(verify_supabase_token)):
 
 @app.put("/api/settings")
 def api_update_settings(settings: SettingsUpdate, user_id: str = Depends(verify_supabase_token)):
-    database.update_user_settings(user_id, settings.auto_connect, settings.notifications)
+    database.update_user_settings(user_id, settings.dict())
     return {"status": "success"}
 
 @app.get("/api/hazards")

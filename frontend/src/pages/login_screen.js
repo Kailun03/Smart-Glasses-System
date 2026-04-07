@@ -7,6 +7,7 @@ export default function LoginScreen({ onSessionComplete }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState(''); 
+  const [avatarUrl, setAvatarUrl] = useState(null); // NEW: Avatar State
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -28,9 +29,22 @@ export default function LoginScreen({ onSessionComplete }) {
 
   const isLandscape = windowWidth > 1000;
 
-  const triggerCinematicExit = (session) => {
-    const name = session.user?.user_metadata?.display_name || 'User';
+  // NEW: Made this function async to fetch data before animating
+  const triggerCinematicExit = async (session) => {
+    // 1. Fetch profile data from the database
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('display_name, avatar_url')
+      .eq('id', session.user.id)
+      .single();
+
+    // 2. Apply DB data, fallback to auth metadata, or fallback to typed name
+    const name = data?.display_name || session.user?.user_metadata?.display_name || fullName || 'User';
     setFullName(name);
+    
+    if (data?.avatar_url) {
+      setAvatarUrl(data.avatar_url);
+    }
     
     // Phase 1: Center the model & text, hide the form
     setIsExiting(true); 
@@ -167,20 +181,59 @@ export default function LoginScreen({ onSessionComplete }) {
             ></model-viewer>
           </div>
 
-          {/* ANIMATION: Welcome Text */}
+          {/* ANIMATION: Welcome Text with Avatar */}
           <div style={{
             opacity: isExiting ? 1 : 0,
-            transform: isExiting ? 'translateY(0)' : 'translateY(30px)',
+            transform: isExiting 
+              ? (isLandscape ? 'translateY(110px)' : 'translateY(0)')
+              : 'translateY(30px)',
             transition: 'all 0.8s cubic-bezier(0.25, 1, 0.5, 1) 0.4s', 
             textAlign: 'center',
             position: 'absolute',
-            bottom: isLandscape ? '-100px' : '-50px', 
-            width: '100%'
+            bottom: isLandscape ? '-50px' : '-100px', 
+            width: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '12px',
+            zIndex: 20,
           }}>
-            <h2 style={{ color: '#00E5FF', fontSize: isLandscape ? '2.2rem' : '1.5rem', fontWeight: '300', margin: 0, letterSpacing: '2px' }}>Welcome,</h2>
-            <h1 style={{ color: '#fff', fontSize: isLandscape ? '4.5rem' : '3rem', fontWeight: '900', margin: 0, textShadow: '0 0 30px rgba(0,229,255,0.4)' }}>
-              {fullName}!
-            </h1>
+            {/* Display the avatar */}
+            <img 
+              src={avatarUrl || '/default_avatar.png'} 
+              alt="User Avatar" 
+              style={{
+                width: isLandscape ? '70px' : '60px', 
+                height: isLandscape ? '70px' : '60px',
+                borderRadius: '50%',
+                border: '3px solid #00E5FF',
+                boxShadow: '0 0 20px rgba(0, 229, 255, 0.4)',
+                objectFit: 'cover'
+              }} 
+            />
+            <div style={{ marginTop: '0px' }}>
+              <h2 style={{ 
+                color: '#00E5FF', 
+                fontSize: isLandscape ? '1.8rem' : '1.3rem', 
+                fontWeight: '300', 
+                margin: 0, 
+                letterSpacing: '2px',
+                textTransform: 'uppercase'
+              }}>
+                Welcome,
+              </h2>
+              <h1 style={{ 
+                color: '#fff', 
+                fontSize: isLandscape ? '4rem' : '2.5rem', 
+                fontWeight: '900', 
+                margin: 0, 
+                textShadow: '0 0 30px rgba(0,229,255,0.4)',
+                lineHeight: 1.1,
+                marginTop: '10px'
+              }}>
+                {fullName}!
+              </h1>
+            </div>
           </div>
         </div>
 
@@ -189,7 +242,6 @@ export default function LoginScreen({ onSessionComplete }) {
             ========================================= */}
         <div style={{ 
           width: '100%', maxWidth: isLandscape ? '480px' : '400px', 
-          // Quickly shoot the form widget to the right
           transform: isExiting ? 'translateX(150vw)' : 'translateX(0)',
           opacity: isExiting ? 0 : 1,
           transition: 'all 0.8s cubic-bezier(0.5, 0, 0.2, 1)',
