@@ -6,6 +6,7 @@ import VisionDashboard from './pages/vision_dashboard';
 import MainDashboard from './pages/main_dashboard';
 import ToolManagement from './pages/tool_management';
 import AnalyticDashboard from './pages/analytic_dashboard';
+import SettingsPage from './pages/setting_page';
 import LoginScreen from './pages/login_screen';
 import Sidebar from './components/Sidebar';
 
@@ -123,6 +124,7 @@ function App() {
           onNavigateHome={() => handleNavigation('home', 'Returning to Control Center...')}
           onNavigateTools={() => handleNavigation('tools', 'Accessing Tool Repository...')}
           onNavigateAnalytics={() => handleNavigation('analytics', 'Generating Safety Reports...')}
+          onNavigateSettings={() => handleNavigation('settings', 'Opening System Settings...')}
           onLogout={handleLogout}
         />
       )}
@@ -143,6 +145,11 @@ function App() {
         {currentPage === 'analytics' && (
           <AnalyticDashboard />
         )}
+
+        {currentPage === 'settings' && (
+          <SettingsPage />
+        )}
+
       </div>
     </div>
   );

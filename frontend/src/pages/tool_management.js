@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { UploadCloud, Trash2, Database, Activity, CheckCircle, Clock, ServerCrash, RotateCw, AlertTriangle, ChevronRight, ChevronLeft, Move, Maximize, Bell, X, Loader2, Toolbox } from 'lucide-react';
+import { supabase } from '../supabaseClient';
 import { API_BASE_URL } from '../config';
 
 const WidgetCard = ({ title, icon: Icon, children, className = "", delay = "0s", style = {} }) => (
@@ -67,7 +68,16 @@ function ToolManagement() {
   useEffect(() => {
     if (prevShowNotifs.current === true && showNotifs === false) {
       if (Array.isArray(notifications) && notifications.some(n => !n.is_read)) {
-        fetch(`${API_BASE_URL}/api/notifications/read`, { method: "PUT" }).catch(e => console.error(e));
+        const markAsRead = async () => {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session) {
+            fetch(`${API_BASE_URL}/api/notifications/read`, { 
+              method: "PUT",
+              headers: { 'Authorization': `Bearer ${session.access_token}` }
+            }).catch(e => console.error(e));
+          }
+        };
+        markAsRead();
         setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
       }
     }
@@ -77,7 +87,21 @@ function ToolManagement() {
   const fetchData = async (isBackground = false) => {
     if (!isBackground) setLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/tools`);
+      // 1. Grab the active user session token
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !session) {
+        throw new Error("No active user session found.");
+      }
+
+      // 2. Fetch Tools (WITH AUTH HEADER)
+      const response = await fetch(`${API_BASE_URL}/api/tools`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`, // <--- The Bouncer Needs This
+          'Content-Type': 'application/json'
+        }
+      });
+
       if (response.ok) {
         const data = await response.json();
         const formattedTools = data.map(t => ({
@@ -89,9 +113,19 @@ function ToolManagement() {
         }));
         setTools(formattedTools);
         setIsOffline(false); 
+      } else {
+        if (response.status === 401) throw new Error("Unauthorized");
       }
 
-      const notifRes = await fetch(`${API_BASE_URL}/api/notifications?limit=10&offset=0`);
+      // 3. Fetch Notifications (WITH AUTH HEADER)
+      const notifRes = await fetch(`${API_BASE_URL}/api/notifications?limit=10&offset=0`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`, // <--- The Bouncer Needs This Too
+          'Content-Type': 'application/json'
+        }
+      });
+
       if (notifRes.ok) {
         const result = await notifRes.json();
         
@@ -105,8 +139,12 @@ function ToolManagement() {
           setNotifications(result.data || []);
         }
         setNotifTotal(result.total_count || 0); 
+      } else {
+        if (notifRes.status === 401) throw new Error("Unauthorized");
       }
+
     } catch (error) {
+      console.error("Fetch Data Error:", error);
       setIsOffline(true);
     } finally {
       if (!isBackground) setLoading(false);
@@ -141,7 +179,13 @@ function ToolManagement() {
 
   const loadMoreNotifications = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/notifications?limit=10&offset=${notifications.length}`);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const response = await fetch(`${API_BASE_URL}/api/notifications?limit=10&offset=${notifications.length}`, {
+        headers: { 'Authorization': `Bearer ${session.access_token}` }
+      });
+
       if (response.ok) {
         const result = await response.json();
         setNotifications(prev => {
@@ -218,7 +262,7 @@ function ToolManagement() {
   };
 
   const handleInitiateReview = async () => {
-    if (!toolName.trim() || !files || files.length < 5) return alert("Tool Name and at least 5 images are required.");
+    if (!toolName.trim() || !files || files.length < 10) return alert("Tool Name and at least 10 images are required.");
     setLoadingToast("Analyzing images with OpenCV...");
     setIsSubmitting(true);
     try {
@@ -262,7 +306,20 @@ function ToolManagement() {
       formData.append("boxes", JSON.stringify(finalBoxes));
       reviewImages.forEach(img => formData.append("files", img.file));
 
-      const response = await fetch(`${API_BASE_URL}/api/tools/train`, { method: "POST", body: formData });
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+
+      if (sessionError || !session) {
+        throw new Error("No active user session found.");
+      }
+
+      const response = await fetch(`${API_BASE_URL}/api/tools/train`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: formData
+      });
+      
       if (response.ok) {
         setToolName(""); setToolDesc(""); setFiles(null);
         document.getElementById('dataset-upload').value = "";
@@ -292,7 +349,14 @@ function ToolManagement() {
   const handleDeleteTool = async (id) => {
     if (!window.confirm("Are you sure you want to delete this tool?")) return;
     try {
-      const response = await fetch(`${API_BASE_URL}/api/tools/${id}`, { method: "DELETE" });
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const response = await fetch(`${API_BASE_URL}/api/tools/${id}`, { 
+        method: "DELETE",
+        headers: { 'Authorization': `Bearer ${session.access_token}` } 
+      });
+
       if (response.ok) fetchData(true); 
     } catch (error) {}
   };
@@ -659,7 +723,7 @@ function ToolManagement() {
           <WidgetCard title="Current Model Specs" icon={Database} delay="0.2s">
             <InfoRow label="Model ID" value={ isLoading && tools.length===0 ? "Loading ..." : isOffline ? "Undefined Model" : "Custom-Tool-Recognition-v1" }  />
             <InfoRow label="Architecture" value={ isLoading && tools.length===0 ? "Loading ..." : isOffline ? "Undefined Architecture" : "YOLOv8-Dual-Agent" } />
-            <InfoRow label="Supported Classes" value={ isLoading && tools.length===0 ? "Loading ..." : `${tools.length} Tools`} highlight={true} />
+            <InfoRow label="Supported Classes" value={ isLoading && tools.length===0 ? "Loading ..." : `${tools.filter(t => t.status === 'DEPLOYED').length} Tools`} highlight={true} />
             <InfoRow label="Database Sync" value={  isLoading && tools.length===0 ? "Loading ..." : isOffline ? "Database Offline" : "Supabase Connected" } highlight={true} />
           </WidgetCard>
 

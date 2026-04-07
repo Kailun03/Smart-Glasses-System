@@ -14,22 +14,31 @@ if not url or not key:
 supabase: Client = create_client(url, key)
 print("[DATABASE] Successfully connected to Supabase Cloud PostgreSQL.")
 
-def add_tool(tool_name: str, description: str, status: str = "QUEUED"):
-    """Inserts a new tool into Supabase and returns the ID."""
-    data = {
-        "tool_name": tool_name,
-        "description": description,
-        "status": status
-    }
-    
+def get_user_settings(user_id: str):
+    res = supabase.table("user_settings").select("*").eq("user_id", user_id).execute()
+    if res.data:
+        return res.data[0]
+    else:
+        # Create default settings if new user
+        default_data = {"user_id": user_id, "auto_connect": True, "notifications": True}
+        ins = supabase.table("user_settings").insert(default_data).execute()
+        return ins.data[0]
+
+def update_user_settings(user_id: str, auto_connect: bool, notifications: bool):
+    data = {"auto_connect": auto_connect, "notifications": notifications}
+    res = supabase.table("user_settings").update(data).eq("user_id", user_id).execute()
+    if not res.data:
+        data["user_id"] = user_id
+        supabase.table("user_settings").insert(data).execute()
+    return True
+
+# --- UPDATED EXISTING FUNCTIONS (Adding user_id filtering) ---
+def add_tool(tool_name: str, description: str, user_id: str, status: str = "QUEUED"):
+    data = {"tool_name": tool_name, "description": description, "status": status, "user_id": user_id}
     response = supabase.table("tools").insert(data).execute()
-    
-    if response.data:
-        return response.data[0]["id"]
-    return None
+    return response.data[0]["id"] if response.data else None
 
 def update_tool_status(tool_id: int, new_status: str):
-    """Updates the training status of a specific tool."""
     try:
         response = supabase.table("tools").update({"status": new_status}).eq("id", tool_id).execute()
         return response.data
@@ -37,79 +46,67 @@ def update_tool_status(tool_id: int, new_status: str):
         print(f"[DB ERROR] Failed to update status: {e}")
         return None
 
-def get_all_tools():
-    """Fetches all registered tools with robust error handling."""
+def get_all_tools(user_id: str):
     try:
-        response = supabase.table("tools").select("*").order("id").execute()
+        response = supabase.table("tools").select("*").eq("user_id", user_id).order("id").execute()
         return response.data
     except Exception as e:
         print(f"[DATABASE CRITICAL] Supabase connection failed: {e}")
 
-def delete_tool(tool_id: int):
-    """Deletes a tool from the database."""
-    response = supabase.table("tools").delete().eq("id", tool_id).execute()
+def delete_tool(tool_id: int, user_id: str):
+    response = supabase.table("tools").delete().eq("id", tool_id).eq("user_id", user_id).execute()
     return True if response.data else False
 
-def log_hazard(hazard_type: str, lat: float = None, lon: float = None):
-    """Saves a detected hazard event to the Supabase cloud."""
+def log_hazard(hazard_type: str, lat: float = None, lon: float = None, user_id: str = None):
     try:
-        supabase.table("hazard_logs").insert({
-            "hazard_type": hazard_type,
-            "latitude": lat,
-            "longitude": lon
-        }).execute()
-        print(f"[DATABASE] Hazard logged: {hazard_type}")
+        data = {"hazard_type": hazard_type, "latitude": lat, "longitude": lon}
+        if user_id: data["user_id"] = user_id
+        supabase.table("hazard_logs").insert(data).execute()
     except Exception as e:
         print(f"[ERROR] Failed to log hazard: {e}")
 
-def get_hazard_history(page: int = 1, page_size: int = 100):
-    """Fetches a specific page of hazards and returns the exact total count."""
+def get_hazard_history(user_id: str, page: int = 1, page_size: int = 100):
     try:
         start = (page - 1) * page_size
-        end = start + page_size - 1
-        
-        response = supabase.table("hazard_logs") \
-            .select("*", count="exact") \
-            .order("timestamp", desc=True) \
-            .range(start, end) \
-            .execute()
-            
-        return {
-            "data": response.data,
-            "total_count": response.count
-        }
-    except Exception as e:
-        print(f"[ERROR] Failed to fetch hazard history: {e}")
-        return {"data": [], "total_count": 0}
-
-def add_notification(message: str, notif_type: str = "info"):
-    """Pushes a notification to the dashboard."""
-    try:
-        supabase.table("notifications").insert({
-            "message": message,
-            "type": notif_type,
-            "is_read": False
-        }).execute()
-    except Exception as e:
-        print(f"Failed to add notification: {e}")
-
-def get_notifications(limit: int = 20, offset: int = 0):
-    """Fetches notifications with support for 'Load More'."""
-    try:
-        res = supabase.table("notifications") \
-            .select("*", count="exact") \
-            .order("created_at", desc=True) \
-            .range(offset, offset + limit - 1) \
-            .execute()
-        return {
-            "data": res.data,
-            "total_count": res.count
-        }
+        response = supabase.table("hazard_logs").select("*", count="exact")\
+            .eq("user_id", user_id).order("timestamp", desc=True)\
+            .range(start, start + page_size - 1).execute()
+        return {"data": response.data, "total_count": response.count}
     except Exception:
         return {"data": [], "total_count": 0}
 
-def mark_notifications_read():
+def add_notification(message: str, user_id: str, notif_type: str = "info"):
     try:
-        supabase.table("notifications").update({"is_read": True}).eq("is_read", False).execute()
+        supabase.table("notifications").insert({"message": message, "type": notif_type, "is_read": False, "user_id": user_id}).execute()
+    except Exception: pass
+
+def get_notifications(user_id: str, limit: int = 20, offset: int = 0):
+    try:
+        res = supabase.table("notifications").select("*", count="exact").eq("user_id", user_id)\
+            .order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+        return {"data": res.data, "total_count": res.count}
     except Exception:
-        pass
+        return {"data": [], "total_count": 0}
+
+def mark_notifications_read(user_id: str):
+    try:
+        supabase.table("notifications").update({"is_read": True}).eq("is_read", False).eq("user_id", user_id).execute()
+    except Exception: pass
+
+def get_user_settings(user_id: str):
+    res = supabase.table("user_settings").select("*").eq("user_id", user_id).execute()
+    if res.data:
+        return res.data[0]
+    else:
+        # Create default settings if new user
+        default_data = {"user_id": user_id, "auto_connect": True, "notifications": True}
+        ins = supabase.table("user_settings").insert(default_data).execute()
+        return ins.data[0]
+
+def update_user_settings(user_id: str, auto_connect: bool, notifications: bool):
+    data = {"auto_connect": auto_connect, "notifications": notifications}
+    res = supabase.table("user_settings").update(data).eq("user_id", user_id).execute()
+    if not res.data:
+        data["user_id"] = user_id
+        supabase.table("user_settings").insert(data).execute()
+    return True

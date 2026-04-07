@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Camera, Battery, MapPin, BrainCircuit, Wifi, ToolboxIcon, Activity, ShieldCheck, Zap } from 'lucide-react';
+import { Camera, Battery, MapPin, BrainCircuit, Wifi, ToolboxIcon, Activity, ShieldCheck } from 'lucide-react';
 import { SYSTEM_VERSION, WS_BASE_URL } from '../config';
 
 const WidgetCard = ({ title, icon: Icon, children, className = "", delay = "0s", style = {} }) => (

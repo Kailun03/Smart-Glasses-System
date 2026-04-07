@@ -40,27 +40,30 @@ if not SUPABASE_JWT_SECRET:
     raise ValueError("FATAL ERROR: SUPABASE_JWT_SECRET is not set in the .env file.")
 
 def verify_supabase_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verifies the JWT token sent from the React frontend."""
+    """Verifies the JWT token using the official Supabase client."""
     token = credentials.credentials
     try:
-        # Decode the token using the secret from .env
-        payload = jwt.decode(
-            token, 
-            SUPABASE_JWT_SECRET, 
-            algorithms=["HS256"], 
-            audience="authenticated"
-        )
-        return payload["sub"] # Returns the securely verified User ID
+        # Instead of manually decoding, we ask Supabase to verify the token natively!
+        user_response = database.supabase.auth.get_user(token)
         
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid authentication token.")
+        if user_response and user_response.user:
+            return user_response.user.id # Successfully verified! Returns the user_id
+        else:
+            raise Exception("No user found for this token.")
+            
+    except Exception as e:
+        print(f"\n[!!! SECURITY REJECTION !!!] Supabase rejected the token.")
+        print(f"Reason: {e}\n")
+        raise HTTPException(status_code=401, detail=f"Token Error: {e}")
         
 class ToolData(BaseModel):
     name: str
     yolo_class: str
     description: str = ""
+
+class SettingsUpdate(BaseModel):
+    auto_connect: bool
+    notifications: bool
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -131,9 +134,10 @@ async def background_training_worker():
     while True:
         job = await training_queue.get()
         tool_id = job["tool_id"]
+        user_id = job["user_id"]
         
         # Verify the tool still exists in the database before starting
-        all_tools = await asyncio.to_thread(database.get_all_tools)
+        all_tools = await asyncio.to_thread(database.get_all_tools, user_id)
         if not any(t['id'] == tool_id for t in all_tools):
             print(f"[QUEUE] Skipping Tool {tool_id} (Already deleted by user)")
             training_queue.task_done()
@@ -151,7 +155,8 @@ async def background_training_worker():
                 tool_name, 
                 job["yolo_class"], 
                 job["saved_paths"], 
-                job["parsed_boxes"]
+                job["parsed_boxes"],
+                user_id
             )
         except Exception as e:
             print(f"[QUEUE ERROR] Failed to train {tool_name}: {e}")
@@ -310,35 +315,39 @@ async def video_feed():
             new_frame_event.clear()
     return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
 
+@app.get("/api/settings")
+def api_get_settings(user_id: str = Depends(verify_supabase_token)):
+    return database.get_user_settings(user_id)
+
+@app.put("/api/settings")
+def api_update_settings(settings: SettingsUpdate, user_id: str = Depends(verify_supabase_token)):
+    database.update_user_settings(user_id, settings.auto_connect, settings.notifications)
+    return {"status": "success"}
+
 @app.get("/api/hazards")
-def api_get_hazards(page: int = 1, limit: int = 100):
-    return database.get_hazard_history(page=page, page_size=limit)
+def api_get_hazards(page: int = 1, limit: int = 100, user_id: str = Depends(verify_supabase_token)):
+    return database.get_hazard_history(user_id, page=page, page_size=limit)
 
 @app.get("/api/tools")
-def api_get_tools(): return database.get_all_tools()
+def api_get_tools(user_id: str = Depends(verify_supabase_token)): 
+    return database.get_all_tools(user_id)
 
 @app.post("/api/tools")
-def api_add_tool(tool: ToolData):
-    tool_id = database.add_tool(tool.name, tool.yolo_class, tool.description)
-    if tool_id: return {"id": tool_id, "message": "Tool added successfully"}
+def api_add_tool(tool: ToolData, user_id: str = Depends(verify_supabase_token)):
+    tool_id = database.add_tool(tool.name, tool.description, user_id)  
+    if tool_id: 
+        return {"id": tool_id, "message": "Tool added successfully"}
     return {"error": "Failed to add tool"}
 
 @app.delete("/api/tools/{tool_id}")
-async def api_delete_tool(tool_id: int):
-    # 1. Signal auto_trainer to stop if it's currently training this ID
+async def api_delete_tool(tool_id: int, user_id: str = Depends(verify_supabase_token)):
     if tool_id in auto_trainer.active_training_flags:
         auto_trainer.active_training_flags[tool_id] = True
-        print(f"[API] Issued kill signal for Tool ID {tool_id}")
-
-    # 2. Delete from Database
-    # This automatically "removes" it from the queue because the 
-    # background_training_worker checks the DB before starting.
-    success = database.delete_tool(tool_id)
-    
+    success = database.delete_tool(tool_id, user_id)
     if success:
-        database.add_notification(f"Tool record and associated training tasks removed.", "info")
-        return {"message": "Tool and training task deleted successfully"}
-    return {"error": "Failed to delete tool"}
+        database.add_notification("Tool record removed.", user_id, "info")
+        return {"message": "Deleted successfully"}
+    raise HTTPException(status_code=400, detail="Failed to delete tool")
 
 @app.post("/api/tools/auto_label")
 async def api_auto_label(files: List[UploadFile] = File(...)):
@@ -353,24 +362,18 @@ async def api_auto_label(files: List[UploadFile] = File(...)):
 
 @app.post("/api/tools/train")
 async def api_train_new_tool(
-    # Notice we removed BackgroundTasks from here!
     tool_name: str = Form(...),
     description: str = Form(""),
     boxes: str = Form(...), 
-    files: List[UploadFile] = File(...)
+    files: List[UploadFile] = File(...),
+    user_id: str = Depends(verify_supabase_token) # Secure this endpoint!
 ):
-    import database
     import shutil
-    import os
-
-    # 1. Register tool in database (Default status is automatically "QUEUED")
-    tool_id = database.add_tool(tool_name, description)
+    
+    tool_id = database.add_tool(tool_name, description, user_id)
     yolo_class = tool_name.lower().replace(" ", "_")
-
-    # 2. Parse the JSON boxes sent from React
     parsed_boxes = json.loads(boxes)
 
-    # 3. Save uploaded files temporarily
     temp_dir = f"temp_uploads_{tool_id}"
     os.makedirs(temp_dir, exist_ok=True)
     saved_paths = []
@@ -381,28 +384,21 @@ async def api_train_new_tool(
             shutil.copyfileobj(file.file, buffer)
         saved_paths.append(file_path)
 
-    # 4. Add the job to our strict FIFO Queue!
     await training_queue.put({
-        "tool_id": tool_id,
-        "tool_name": tool_name,
-        "yolo_class": yolo_class,
-        "saved_paths": saved_paths,
-        "parsed_boxes": parsed_boxes
+        "tool_id": tool_id, "tool_name": tool_name, "yolo_class": yolo_class,
+        "saved_paths": saved_paths, "parsed_boxes": parsed_boxes, "user_id": user_id
     })
     
-    # 5. Send a notification to the UI
-    database.add_notification(f"'{tool_name}' added to the training queue. [ Position: {training_queue.qsize()} ]", "info")
-    
+    database.add_notification(f"'{tool_name}' added to training queue.", user_id, "info")
     return {"status": "success", "tool_id": tool_id}
 
 @app.get("/api/notifications")
-def api_get_notifications(limit: int = 20, offset: int = 0):
-    return database.get_notifications(limit=limit, offset=offset)
+def api_get_notifications(limit: int = 20, offset: int = 0, user_id: str = Depends(verify_supabase_token)):
+    return database.get_notifications(user_id, limit=limit, offset=offset)
 
 @app.put("/api/notifications/read")
-def api_mark_notifications_read():
-    import database
-    database.mark_notifications_read()
+def api_mark_notifications_read(user_id: str = Depends(verify_supabase_token)):
+    database.mark_notifications_read(user_id)
     return {"status": "success"}
 
 @app.websocket("/ws/dashboard")

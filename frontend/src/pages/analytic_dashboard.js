@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, forwardRef } from 're
 import { ShieldAlert, TrendingUp, AlertTriangle, List, RotateCw, Eye, Type, AlignLeft, Calendar, ArrowDownUp, XCircle, ServerCrash, ChevronLeft, ChevronRight, CloudAlert } from 'lucide-react';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
+import { supabase } from '../supabaseClient';
 import { API_BASE_URL } from '../config';
 
 const CHART_COLORS = ['#ef4444', '#f59e0b', '#00E5FF', '#2dd4bf', '#a855f7', '#fb7185'];
@@ -59,7 +60,22 @@ function AnalyticDashboard() {
     setLoading(true);
     setIsOffline(false);
     try {
-      const response = await fetch(`${API_BASE_URL}/api/hazards?limit=5000`);
+      // 1. Get the secure session token from Supabase
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (!session) {
+        throw new Error("No active user session found.");
+      }
+
+      // 2. Attach the token to the fetch headers
+      const response = await fetch(`${API_BASE_URL}/api/hazards?limit=5000`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`, // <--- THIS FIXES THE 401 ERROR
+          'Content-Type': 'application/json'
+        }
+      });
+      
       if (!response.ok) throw new Error("Network response was not ok");
 
       const result = await response.json(); 

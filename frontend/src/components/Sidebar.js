@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Shield, LayoutDashboard, Database, Settings, ShieldAlert, LogOut } from 'lucide-react';
 import { SYSTEM_VERSION } from '../config';
 
-function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnalytics, onLogout }) {
+function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnalytics, onNavigateSettings, onLogout }) {
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
 
   const NavButton = ({ id, icon: Icon, label, onClick }) => (
@@ -66,7 +66,7 @@ function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnaly
           <NavButton id="home" icon={LayoutDashboard} label="Control Centre" onClick={onNavigateHome} />
           <NavButton id="tools" icon={Database} label="Tool Management" onClick={onNavigateTools} />
           <NavButton id="analytics" icon={ShieldAlert} label="Safety Analytics" onClick={onNavigateAnalytics} />
-          <NavButton id="settings" icon={Settings} label="System Settings" onClick={onNavigateHome} />
+          <NavButton id="settings" icon={Settings} label="System Settings" onClick={onNavigateSettings} />
         </div>
 
         <span style={{ color: '#64748b', fontSize: '14px', paddingLeft: '54px' }}>System Version : {SYSTEM_VERSION}</span>

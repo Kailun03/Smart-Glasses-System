@@ -54,7 +54,7 @@ def get_opencv_box(image_bytes):
         "h": (h / img_h) * 100
     }
 
-def run_training_pipeline(tool_id: int, tool_name: str, yolo_class: str, image_paths: list, boxes: list):
+def run_training_pipeline(tool_id: int, tool_name: str, yolo_class: str, image_paths: list, boxes: list, user_id: str):
     # Initialize flag for this specific session
     active_training_flags[tool_id] = False
     
@@ -73,11 +73,16 @@ def run_training_pipeline(tool_id: int, tool_name: str, yolo_class: str, image_p
             os.remove(cache_file)
             print("[AUTO-TRAIN] Purged old YOLO cache.")
         
-        all_tools = database.get_all_tools()
-        class_id = next((index for index, t in enumerate(all_tools) if t['id'] == tool_id), len(all_tools) - 1)
+        # Get the latest tools for this specific user
+        all_tools = database.get_all_tools(user_id)
+        
+        # Create a dictionary to map tool names to their NEW correct index
+        valid_classes = {t['tool_name'].lower().replace(" ", "_"): idx for idx, t in enumerate(all_tools)}
+        class_id = valid_classes.get(yolo_class, len(all_tools) - 1)
         
         valid_images = 0
         
+        # 1. Write the newly uploaded tool's images and labels
         for i, (img_path, box) in enumerate(zip(image_paths, boxes)):
             filename = f"{yolo_class}_{i}" 
             new_img_path = os.path.join(images_dir, f"{filename}.jpg")
@@ -88,18 +93,13 @@ def run_training_pipeline(tool_id: int, tool_name: str, yolo_class: str, image_p
             if box is None:
                 with open(label_path, "w") as f: pass
             else:
-                # If React sends a box that exceeds 1.0 (100%), YOLO will silently drop the entire image!
                 x_pct = max(0.0, min(box['x'] / 100.0, 1.0))
                 y_pct = max(0.0, min(box['y'] / 100.0, 1.0))
                 w_pct = max(0.01, min(box['w'] / 100.0, 1.0))
                 h_pct = max(0.01, min(box['h'] / 100.0, 1.0))
                 
-                cx = x_pct + (w_pct / 2.0)
-                cy = y_pct + (h_pct / 2.0)
-                
-                # Double clamp centers to ensure they stay inside the canvas
-                cx = max(0.001, min(cx, 0.999))
-                cy = max(0.001, min(cy, 0.999))
+                cx = max(0.001, min(x_pct + (w_pct / 2.0), 0.999))
+                cy = max(0.001, min(y_pct + (h_pct / 2.0), 0.999))
                 
                 with open(label_path, "w") as f:
                     f.write(f"{class_id} {cx:.6f} {cy:.6f} {w_pct:.6f} {h_pct:.6f}\n")
@@ -108,6 +108,41 @@ def run_training_pipeline(tool_id: int, tool_name: str, yolo_class: str, image_p
         if valid_images < 10:
             print("[AUTO-TRAIN WARNING] Less than 10 valid images detected.")
 
+        # 2. DATASET SELF-HEALING (Fixes the IndexError!)
+        print("[AUTO-TRAIN] Cleaning up deleted tools and re-aligning class IDs...")
+        for label_file in os.listdir(labels_dir):
+            if not label_file.endswith(".txt"): continue
+            
+            base_name = label_file[:-4] # Remove .txt
+            last_us = base_name.rfind('_')
+            
+            if last_us != -1:
+                class_name_in_file = base_name[:last_us]
+                
+                # If this tool was deleted from the database, wipe its files
+                if class_name_in_file not in valid_classes:
+                    os.remove(os.path.join(labels_dir, label_file))
+                    img_path = os.path.join(images_dir, base_name + ".jpg")
+                    if os.path.exists(img_path): 
+                        os.remove(img_path)
+                else:
+                    # If it exists, update the .txt file to guarantee the ID matches the database
+                    correct_id = valid_classes[class_name_in_file]
+                    filepath = os.path.join(labels_dir, label_file)
+                    with open(filepath, "r") as f:
+                        lines = f.readlines()
+                    
+                    if lines:
+                        new_lines = []
+                        for line in lines:
+                            parts = line.strip().split()
+                            if len(parts) >= 5:
+                                parts[0] = str(correct_id) # Override with correct ID
+                                new_lines.append(" ".join(parts) + "\n")
+                        with open(filepath, "w") as f:
+                            f.writelines(new_lines)
+
+        # 3. Create the data.yaml
         yaml_path = os.path.join(MASTER_DATASET_DIR, "data.yaml")
         yaml_data = {
             "train": "images/train",
@@ -118,9 +153,9 @@ def run_training_pipeline(tool_id: int, tool_name: str, yolo_class: str, image_p
         with open(yaml_path, "w") as f:
             yaml.dump(yaml_data, f)
 
-        # 5. Train the Model 
+        # 4. Train the Model 
         database.update_tool_status(tool_id, "TRAINING")
-        database.add_notification(f"Started advanced neural training for {tool_name}.", "info")
+        database.add_notification(f"Started advanced neural training for {tool_name}.", user_id, "info")
         
         model = YOLO("yolov8n.pt") 
         project_path = os.path.abspath("SGS_Updates")
@@ -157,7 +192,7 @@ def run_training_pipeline(tool_id: int, tool_name: str, yolo_class: str, image_p
             translate=0.1, scale=0.5, fliplr=0.5 
         )
         
-        # 6. Hot-Swap
+        # 5. Hot-Swap
         weights_dir = os.path.join(project_path, "master_model", "weights")
         best_pt = os.path.join(weights_dir, "best.pt")
         last_pt = os.path.join(weights_dir, "last.pt")
@@ -173,17 +208,17 @@ def run_training_pipeline(tool_id: int, tool_name: str, yolo_class: str, image_p
         tool_recognition.reload_model() 
         
         database.update_tool_status(tool_id, "DEPLOYED")
-        database.add_notification(f"Successfully deployed highly robust model for {tool_name}!", "success")
+        database.add_notification(f"Successfully deployed highly robust model for {tool_name}!", user_id, "success")
         print(f"[AUTO-TRAIN] Success! Highly robust HITL model deployed.")
         
     except Exception as e:
         if str(e) == "Training Cancelled by User":
-            database.add_notification(f"Training for {tool_name} was aborted.", "error")
+            database.add_notification(f"Training for {tool_name} was aborted.", user_id, "error")
         else:
             print(f"[CRITICAL TRAINING ERROR]: {e}")
             traceback.print_exc()
             database.update_tool_status(tool_id, "FAILED")
-            database.add_notification(f"Training failed for {tool_name}.", "error")
+            database.add_notification(f"Training failed for {tool_name}.", user_id,"error")
     finally:
         # Clean up the flag
         if tool_id in active_training_flags:

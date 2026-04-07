@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Lock, Mail, UserPlus, LogIn, User, ShieldCheck } from 'lucide-react';
+import { Lock, Mail, User, ShieldCheck } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 
 export default function LoginScreen({ onSessionComplete }) {
