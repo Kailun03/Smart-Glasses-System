@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Camera, Battery, MapPin, BrainCircuit, Wifi, ToolboxIcon, Activity, ShieldCheck } from 'lucide-react';
+import { Camera, Battery, MapPin, BrainCircuit, Wifi, ToolboxIcon, Activity, ShieldCheck, Mic, Terminal } from 'lucide-react';
 import { SYSTEM_VERSION, WS_BASE_URL } from '../config';
 
 const WidgetCard = ({ title, icon: Icon, children, className = "", delay = "0s", style = {} }) => (
@@ -22,6 +22,28 @@ function MainDashboard({ onNavigateVision }) {
   const [isLoading, setIsLoading] = useState(false);
   const [sysState, setSysState] = useState({ mode: "NORMAL", lat: 5.41, lon: 100.33 });
   const [locationName, setLocationName] = useState("Locating ...");
+  
+  // NEW: Dynamic Logs State (Starts with a single initialization message)
+  const [sysLogs, setSysLogs] = useState([
+    { time: new Date(), text: "System heartbeat acknowledged. Dashboard GUI operating nominally.", type: "system" }
+  ]);
+
+  // Color mapping for dynamic logs
+  const logColors = {
+    info: '#00E5FF',     // Cyan
+    success: '#10b981',  // Green
+    warning: '#f59e0b',  // Orange
+    error: '#ef4444',    // Red
+    system: '#a855f7'    // Purple
+  };
+
+  // Helper function to push new logs to the terminal
+  const appendLog = (text, type = "info") => {
+    setSysLogs(prev => {
+      const newLogs = [...prev, { time: new Date(), text, type }];
+      return newLogs.slice(-4); // Keep only the latest 4 messages so the box doesn't grow infinitely
+    });
+  };
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -35,14 +57,31 @@ function MainDashboard({ onNavigateVision }) {
     ws.onopen = () => {
       setIsLoading(false);
       setIsHostOffline(false);
+      appendLog("Secure WebSocket tunnel established with AI core.", "success");
     };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        
+        // 1. Update general state
         if (data.type === "status" || data.mode) {
           if (data.device_connected !== undefined) setIsDeviceConnected(data.device_connected);
           setSysState(prev => ({ ...prev, mode: data.mode || prev.mode, lat: data.location?.lat || prev.lat, lon: data.location?.lon || prev.lon }));
+        }
+
+        // 2. Catch backend log broadcasts and push them to the terminal!
+        if (data.log) {
+          let logType = "info";
+          const upperLog = data.log.toUpperCase();
+          
+          // Auto-color the logs based on keywords from your Python server
+          if (upperLog.includes("ERROR") || upperLog.includes("CRITICAL") || upperLog.includes("LOST")) logType = "error";
+          else if (upperLog.includes("WARNING") || upperLog.includes("HAZARD")) logType = "warning";
+          else if (upperLog.includes("SUCCESS") || upperLog.includes("SAFE")) logType = "success";
+          else if (upperLog.includes("NAV")) logType = "system";
+          
+          appendLog(data.log, logType);
         }
       } catch (e) {}
     };
@@ -50,6 +89,7 @@ function MainDashboard({ onNavigateVision }) {
     ws.onclose = () => {
       setIsLoading(false);
       setIsHostOffline(true);
+      appendLog("Connection to AI core lost. Retrying...", "error");
     };
 
     return () => ws.close();
@@ -65,12 +105,8 @@ function MainDashboard({ onNavigateVision }) {
           const state = data.address.state;
           setLocationName(city && state ? `${city}, ${state}` : "Location Acquired");
         }
-      } catch (err) {
-        // Silently fail and keep previous location name if API rate limits
-      }
+      } catch (err) {}
     };
-    
-    // Only fetch if coordinates are valid and not the default 0,0
     if (sysState.lat && sysState.lon) {
         const timer = setTimeout(fetchCityName, 2000);
         return () => clearTimeout(timer);
@@ -318,6 +354,14 @@ function MainDashboard({ onNavigateVision }) {
             <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0, fontWeight: '500' }}>Character recognition for workplace safety signs and machinery labels.</p>
           </WidgetCard>
 
+          <WidgetCard title="Voice Command Engine" icon={Mic} delay="0.5s">
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
+              <span style={{ fontWeight: '800', fontSize: '12px' }}>Audio Processing</span>
+              <div style={{ color: '#a855f7', fontSize: '10px', fontWeight: '900', border: '1px solid #a855f7', padding: '4px 8px', borderRadius: '6px' }}>ACTIVE</div>
+            </div>
+            <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0, fontWeight: '500' }}>Listening for "Hey Glasses" wake word. Edge TTS voice synthesis ready.</p>
+          </WidgetCard>
+          
           <WidgetCard title="Telemetry" icon={MapPin} delay="0.4s">
             <div style={{ background: 'rgba(0,0,0,0.2)', padding: '16px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)', boxShadow: 'inset 0 2px 10px rgba(0,0,0,0.2)' }}>
               <div style={{ fontSize: '14px', fontWeight: '800', color: isDeviceConnected ? '#f8fafc' : '#475569' }}>{isDeviceConnected ? locationName : "Searching GPS ..."}</div>
@@ -325,6 +369,35 @@ function MainDashboard({ onNavigateVision }) {
             </div>
           </WidgetCard>
         </div>
+
+        {/* DYNAMIC TERMINAL */}
+        <div className="animate-slide-up" style={{ animationDelay: '0.6s', marginTop: '32px', marginBottom: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#94a3b8', fontSize: '12px', fontWeight: '800', letterSpacing: '1.5px', textTransform: 'uppercase', marginBottom: '16px', paddingLeft: '8px' }}>
+            <Terminal size={16} color="#00E5FF" />
+            Live Diagnostics Feed
+          </div>
+          
+          <div style={{
+            background: 'rgba(15, 23, 42, 0.4)', backdropFilter: 'blur(25px)', border: '1px solid rgba(255, 255, 255, 0.08)', 
+            borderRadius: '24px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px',
+            boxShadow: 'inset 0 4px 20px rgba(0,0,0,0.4)', minHeight: '140px'
+          }}>
+            {sysLogs.map((log, index) => (
+              <div key={index} style={{ display: 'flex', gap: '16px', fontSize: '13px', color: '#94a3b8', fontFamily: 'monospace' }}>
+                <span style={{ color: logColors[log.type] || logColors.info, minWidth: '90px' }}>
+                  [{log.time.toLocaleTimeString([], { hour12: false })}]
+                </span>
+                <span style={{ color: log.type === "error" ? '#ef4444' : '#94a3b8' }}>
+                  {log.text}
+                </span>
+              </div>
+            ))}
+            {sysLogs.length === 0 && (
+              <span style={{color: '#64748b', fontSize: '13px', fontStyle: 'italic'}}>Waiting for telemetry...</span>
+            )}
+          </div>
+        </div>
+
       </main>
     </div>
   );
