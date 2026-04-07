@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Activity, Terminal, Trash2, Server, Cpu, Glasses, LogOut, Battery, Navigation, Command, Volume2, VolumeX, Mic, MicOff } from 'lucide-react';
 import { WS_BASE_URL } from '../config';
+import { supabase } from '../supabaseClient';
 
 const SYSTEM_MODES = {
   NORMAL: { id: 'NORMAL', label: 'Normal Mode', color: 'transparent' },
@@ -205,7 +206,12 @@ function VisionDashboard({ onNavigate }) {
       const ws = new WebSocket(`${WS_BASE_URL}/ws/dashboard`);
       wsRef.current = ws;
 
-      ws.onopen = () => {
+      ws.onopen = async () => {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session && session.user) {
+            ws.send(JSON.stringify({ type: "command", command: "SYNC_USER", user_id: session.user.id }));
+        }
+
         const wasReconnecting = reconnectAttemptsRef.current > 0;
         reconnectAttemptsRef.current = 0;
         setBackendConnected(true);
@@ -355,13 +361,16 @@ function VisionDashboard({ onNavigate }) {
     };
   }, []);
 
-  const sendCommand = (payload) => {
+  const sendCommand = async (payload) => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       setLogs(prev => [...prev, { time: new Date().toLocaleTimeString(), text: "Backend not connected. Command not sent.", type: "error" }]);
       speakInstruction("Backend not connected. Command not sent.")
       return;
     }
+
+    const { data: { session } } = await supabase.auth.getSession();
+    const user_id = session?.user?.id || "";
 
     const cmd = String(payload?.command || "").toUpperCase();
     if (cmd === "FULL_OCR") {
@@ -383,7 +392,7 @@ function VisionDashboard({ onNavigate }) {
       setNavState({ active: false, provider: null, dest: null, pending: false });
     }
 
-    ws.send(JSON.stringify({ type: "command", ...payload }));
+    ws.send(JSON.stringify({ type: "command", user_id, ...payload }));
   };
 
   const parseLatLon = (raw) => {

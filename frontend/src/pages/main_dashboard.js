@@ -55,6 +55,28 @@ function MainDashboard({ onNavigateVision }) {
     return () => ws.close();
   }, []);
 
+  useEffect(() => {
+    const fetchCityName = async () => {
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${sysState.lat}&lon=${sysState.lon}&zoom=14`);
+        const data = await res.json();
+        if (data && data.address) {
+          const city = data.address.city || data.address.town || data.address.county;
+          const state = data.address.state;
+          setLocationName(city && state ? `${city}, ${state}` : "Location Acquired");
+        }
+      } catch (err) {
+        // Silently fail and keep previous location name if API rate limits
+      }
+    };
+    
+    // Only fetch if coordinates are valid and not the default 0,0
+    if (sysState.lat && sysState.lon) {
+        const timer = setTimeout(fetchCityName, 2000);
+        return () => clearTimeout(timer);
+    }
+  }, [sysState.lat, sysState.lon]);
+
   return (
     <div className="dashboard-container">
       {/* Background Orbs */}

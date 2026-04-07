@@ -72,8 +72,8 @@ def route_osrm(start: LatLng, dest: LatLng) -> Optional[Dict]:
 class NavigationStep:
     instruction: str
     distance_m: float
-    start_lat: float
-    start_lon: float
+    target_lat: float # FIXED: Renamed to target to clearly mark the destination node
+    target_lon: float
 
 @dataclass
 class NavigationPlan:
@@ -96,13 +96,12 @@ def plan_navigation(start: LatLng, dest: LatLng, dest_name: str = "Destination")
                 for s in leg.get("steps", []):
                     maneuver = s.get("maneuver", {})
                     instr = maneuver.get("instruction") or s.get("name") or "Continue"
-                    # Extract the [lon, lat] of the turn intersection
-                    loc = maneuver.get("location", [start[1], start[0]]) 
+                    loc = maneuver.get("location", [dest[1], dest[0]]) 
                     steps.append(NavigationStep(
                         instruction=instr, 
                         distance_m=float(s.get("distance", 0.0)),
-                        start_lat=float(loc[1]),
-                        start_lon=float(loc[0])
+                        target_lat=float(loc[1]),
+                        target_lon=float(loc[0])
                     ))
             return NavigationPlan(
                 start=start, dest=dest, steps=steps,
@@ -117,7 +116,7 @@ def plan_navigation(start: LatLng, dest: LatLng, dest_name: str = "Destination")
     bearing = _bearing_deg(start, dest)
     phrase = _bearing_to_turn_phrase(bearing)
     steps = [
-        NavigationStep(f"{phrase} towards destination.", max(dist - 10.0, 0.0), start[0], start[1]),
+        NavigationStep(f"{phrase} towards destination.", max(dist - 10.0, 0.0), dest[0], dest[1]),
         NavigationStep("You have arrived at your destination.", 0.0, dest[0], dest[1]),
     ]
     return NavigationPlan(start=start, dest=dest, steps=steps, total_distance_m=dist, duration_sec=duration, provider="fallback", dest_name=dest_name)
@@ -130,48 +129,62 @@ class NavigationSession:
         self.plan: Optional[NavigationPlan] = None
         self.step_index: int = 0
         self.announced_current: bool = False
+        self.last_announce_time: float = 0.0 # FIXED: Added this variable
 
     def start(self, plan: NavigationPlan) -> None:
         self.active = True
         self.plan = plan
         self.step_index = 0
         self.announced_current = False
+        self.last_announce_time = 0.0 # Reset on start
 
     def stop(self) -> None:
         self.active = False
         self.plan = None
 
-    def process_location(self, current_lat: float, current_lon: float) -> Optional[str]:
-        """
-        Takes the user's live GPS coordinates. Calculates if they are close enough
-        to the next turn to trigger the audio instruction. Returns the text if so.
-        """
-        if not self.active or not self.plan:
+    def process_location(self, current_lat: float, current_lon: float, current_heading: float = None):
+        # FIXED: use self.plan instead of self.route_plan
+        if not self.active or not self.plan or not self.plan.steps:
             return None
-
-        if self.step_index >= len(self.plan.steps):
-            self.stop()
-            return "You have arrived at your destination."
-
-        # Always announce the very first step to get them moving
-        if not self.announced_current:
-            self.announced_current = True
-            return self.plan.steps[self.step_index].instruction
-
-        # Calculate distance to the NEXT turn/waypoint
-        if self.step_index + 1 < len(self.plan.steps):
-            next_step = self.plan.steps[self.step_index + 1]
-            dist_to_next = _haversine_m((current_lat, current_lon), (next_step.start_lat, next_step.start_lon))
             
-            # If user is within 15 meters of the turn intersection, announce it!
-            if dist_to_next <= 15.0:
-                self.step_index += 1
-                self.announced_current = True
-                return next_step.instruction
-        else:
-            dist_to_dest = _haversine_m((current_lat, current_lon), (self.plan.dest[0], self.plan.dest[1]))
-            if dist_to_dest <= 15.0:
-                self.stop()
-                return "You have arrived at your destination."
+        now = time.time()
+        # Prevent spamming audio instructions (every 8 seconds max)
+        if now - self.last_announce_time < 8.0:
+            return None 
 
-        return None
+        # FIXED: Pull coordinates from the current step
+        current_step = self.plan.steps[0]
+        target_lat = current_step.target_lat
+        target_lon = current_step.target_lon
+        
+        # FIXED: Use correct function names (_haversine_m and _bearing_deg)
+        distance_to_next = _haversine_m((current_lat, current_lon), (target_lat, target_lon))
+        target_bearing = _bearing_deg((current_lat, current_lon), (target_lat, target_lon))
+
+        self.last_announce_time = now
+        
+        # Default instruction
+        turn_instruction = "Proceed forward"
+
+        # If the mobile phone provided the compass heading, we calculate relative turns!
+        if current_heading is not None:
+            turn_angle = (target_bearing - current_heading + 360) % 360
+            if 15 < turn_angle <= 165:
+                turn_instruction = "Turn right"
+            elif 195 <= turn_angle < 345:
+                turn_instruction = "Turn left"
+            elif 165 < turn_angle < 195:
+                turn_instruction = "Turn around"
+
+        # Arrival check (if user is within 15 meters of the target node)
+        if distance_to_next < 15:
+            if len(self.plan.steps) == 1:
+                self.active = False
+                return "You have arrived at your destination."
+            else:
+                self.plan.steps.pop(0) # FIXED: Move to the next step
+                return f"{turn_instruction} for the next step."
+
+        # Normal walking instruction
+        dist_rounded = int(distance_to_next)
+        return f"{turn_instruction} for {dist_rounded} meters."

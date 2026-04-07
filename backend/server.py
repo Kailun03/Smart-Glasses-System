@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, UploadFile, File, Form, Depends, HTTPException, status
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, UploadFile, File, Form, Depends, HTTPException, status, Query, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -18,6 +18,7 @@ import database
 import io
 from pydantic import BaseModel
 from typing import List
+from dotenv import load_dotenv
 import shutil
 import jwt
 
@@ -29,6 +30,9 @@ import tool_recognition as recognize_tool
 import gps_navigation as gps
 from voice_processor import VoiceCommandEngine
 import auto_trainer
+
+load_dotenv()
+webhookKey: str = os.environ.get("WEBHOOK_SECURITY_KEY")
 
 app = FastAPI(title="AURA Vision API")
 
@@ -43,14 +47,11 @@ def verify_supabase_token(credentials: HTTPAuthorizationCredentials = Depends(se
     """Verifies the JWT token using the official Supabase client."""
     token = credentials.credentials
     try:
-        # Instead of manually decoding, we ask Supabase to verify the token natively!
         user_response = database.supabase.auth.get_user(token)
-        
         if user_response and user_response.user:
-            return user_response.user.id # Successfully verified! Returns the user_id
+            return user_response.user.id
         else:
             raise Exception("No user found for this token.")
-            
     except Exception as e:
         print(f"\n[!!! SECURITY REJECTION !!!] Supabase rejected the token.")
         print(f"Reason: {e}\n")
@@ -91,6 +92,11 @@ nav_session = gps.NavigationSession()
 last_nav_push = 0.0
 DEFAULT_START_LOCATION = (5.41, 100.33)
 current_location = DEFAULT_START_LOCATION
+current_heading = None
+current_speed = None
+
+# NEW: Master User ID tracker for autonomous background processes
+global_user_id = None 
 
 target_tool_name = None 
 dashboard_awake = False 
@@ -112,7 +118,6 @@ new_frame_event = asyncio.Event()
 last_frame_received_time = 0
 hardware_watchdog_task = None
 
-# --- AUDIO & VOICE GLOBALS ---
 audio_buffer = bytearray()
 last_audio_time = 0
 
@@ -123,51 +128,40 @@ time_since_last_speech = 0
 frontend_mic_active = False
 
 is_glasses_awake = False
-hardware_wake_timer = 0       # Tracks how long the hardware has been awake
-accumulated_command = ""      # Stitches fragmented sentences together
-is_processing_audio = False   # Mutex to prevent sleeping while Google is translating
+hardware_wake_timer = 0       
+accumulated_command = ""      
+is_processing_audio = False   
 
 training_queue = asyncio.Queue()
 
 @app.on_event("startup")
 async def startup_event():
-    """Starts the background queue worker when the server boots."""
     asyncio.create_task(background_training_worker())
 
 async def background_training_worker():
-    """Constantly watches the queue and trains one model at a time."""
     print("[SYSTEM] Background Training Worker Initialized.")
     while True:
         job = await training_queue.get()
         tool_id = job["tool_id"]
         user_id = job["user_id"]
         
-        # Verify the tool still exists in the database before starting
         all_tools = await asyncio.to_thread(database.get_all_tools, user_id)
-        if not any(t['id'] == tool_id for t in all_tools):
+        if all_tools and not any(t['id'] == tool_id for t in all_tools):
             print(f"[QUEUE] Skipping Tool {tool_id} (Already deleted by user)")
             training_queue.task_done()
             continue
 
-        # Start actual training pipeline
         tool_name = job["tool_name"]
         print(f"[QUEUE] Dequeued tool '{tool_name}'. Starting training...")
         try:
             import auto_trainer
-            # Run the heavy YOLO training in a separate thread so it doesn't freeze the server
             await asyncio.to_thread(
                 auto_trainer.run_training_pipeline,
-                tool_id, 
-                tool_name, 
-                job["yolo_class"], 
-                job["saved_paths"], 
-                job["parsed_boxes"],
-                user_id
+                tool_id, tool_name, job["yolo_class"], job["saved_paths"], job["parsed_boxes"], user_id
             )
         except Exception as e:
             print(f"[QUEUE ERROR] Failed to train {tool_name}: {e}")
         finally:
-            # Mark the job as finished so the queue can move to the next one
             training_queue.task_done()
             print(f"[QUEUE] Finished processing '{tool_name}'. Waiting for next job...")
 
@@ -241,7 +235,6 @@ async def generate_speech_pcm(text: str) -> Optional[bytes]:
         tts_pcm_cache[cache_key] = pcm_data
         return pcm_data
     except Exception as e:
-        print(f"[ERROR] TTS Generation failed: {e}")
         return None
 
 async def _process_and_stream_audio(text: str):
@@ -266,7 +259,7 @@ async def _process_and_stream_audio(text: str):
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        print(f"[WARNING] Audio stream interrupted: {e}")
+        pass
     finally:
         if current_audio_text == text:
             current_audio_text = ""
@@ -288,6 +281,7 @@ async def stream_audio_to_glasses(text: str, preemptive: bool = True):
     current_audio_task = asyncio.create_task(_process_and_stream_audio(text))
 
 async def _background_safety_ocr(clean_frame: np.ndarray, current_mode: str):
+    global global_user_id
     try:
         annotated_ocr_img, safety_keywords, snippet = await asyncio.to_thread(recognize_character.scan_safety_keywords, clean_frame)
         if safety_keywords:
@@ -305,7 +299,8 @@ async def _background_safety_ocr(clean_frame: np.ndarray, current_mode: str):
                 except: pass
             await stream_audio_to_glasses(instruction_str)
             await _broadcast(payload)
-            asyncio.create_task(asyncio.to_thread(database.log_hazard, f"SIGN: {kw_str}", current_location[0], current_location[1]))
+            # PASS THE CAPTURED USER_ID
+            asyncio.create_task(asyncio.to_thread(database.log_hazard, f"SIGN: {kw_str}", current_location[0], current_location[1], global_user_id))
     except Exception as e:
         print(f"[OCR ERROR] {e}")
 
@@ -361,7 +356,6 @@ async def api_auto_label(files: List[UploadFile] = File(...)):
     results = []
     for file in files:
         contents = await file.read()
-        # Get the OpenCV guess for this image
         box = auto_trainer.get_opencv_box(contents)
         results.append({"filename": file.filename, "box": box})
     return results
@@ -372,10 +366,9 @@ async def api_train_new_tool(
     description: str = Form(""),
     boxes: str = Form(...), 
     files: List[UploadFile] = File(...),
-    user_id: str = Depends(verify_supabase_token) # Secure this endpoint!
+    user_id: str = Depends(verify_supabase_token)
 ):
     import shutil
-    
     tool_id = database.add_tool(tool_name, description, user_id)
     yolo_class = tool_name.lower().replace(" ", "_")
     parsed_boxes = json.loads(boxes)
@@ -407,6 +400,43 @@ def api_mark_notifications_read(user_id: str = Depends(verify_supabase_token)):
     database.mark_notifications_read(user_id)
     return {"status": "success"}
 
+@app.api_route("/api/telemetry/owntracks", methods=["GET", "POST"])
+async def owntracks_webhook(request: Request, key: str = Query(None)):
+    if key != webhookKey: 
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    global current_location, current_heading, current_speed
+    if request.method == "POST":
+        try:
+            data = await request.json()
+            if data.get("_type") == "location":
+                lat = data.get("lat")
+                lon = data.get("lon")
+                heading = data.get("cog")
+                speed = data.get("vel")
+                
+                if lat is not None and lon is not None:
+                    current_location = (float(lat), float(lon))
+                if heading is not None and heading >= 0: 
+                    current_heading = float(heading)
+                if speed is not None and speed >= 0: 
+                    current_speed = float(speed)
+        except Exception as e:
+            pass
+    elif request.method == "GET":
+        lat = request.query_params.get("lat")
+        lon = request.query_params.get("lon")
+        if lat is not None and lon is not None:
+            current_location = (float(lat), float(lon))
+            
+    await _broadcast({
+        "type": "status", 
+        "device_connected": edge_device_ws is not None, 
+        "mode": active_mode, 
+        "location": {"lat": current_location[0], "lon": current_location[1]}
+    })
+    return {"status": "ok", "message": "Location updated"}
+
 @app.websocket("/ws/dashboard")
 async def dashboard_endpoint(websocket: WebSocket):
     global edge_device_ws
@@ -428,20 +458,17 @@ async def dashboard_endpoint(websocket: WebSocket):
 async def background_ai_worker():
     global raw_frame_buffer, latest_frame, latest_jpeg_bytes, latest_frame_seq, is_currently_safe, last_ocr_time, edge_device_ws, last_nav_push, active_mode, target_tool_name, dashboard_awake, last_guidance_time, last_guidance_text
     global is_glasses_awake, frontend_mic_active, is_processing_audio, hardware_wake_timer, accumulated_command
+    global global_user_id # Access our captured ID
     
     while True:
         try:
-            # --- THE NEW MASTER TIMEOUT CHECK ---
-            # The backend firmly controls the hardware microphone timeout!
             if is_glasses_awake and not frontend_mic_active and not is_processing_audio:
-                if time.time() - hardware_wake_timer > 9.0: # 9 seconds of absolute silence
+                if time.time() - hardware_wake_timer > 9.0: 
                     is_glasses_awake = False
                     accumulated_command = ""
                     await stream_audio_to_glasses("Listener went back to sleep.", preemptive=False)
                     await _broadcast({"type": "status", "is_awake": False, "mode": active_mode})
-                    print("[SYNC] Hardware Mic timed out (9s silence). Returning to sleep.")
-            # ------------------------------------
-
+                    
             if raw_frame_buffer is not None:
                 img_to_process = raw_frame_buffer
                 raw_frame_buffer = None 
@@ -491,7 +518,8 @@ async def background_ai_worker():
                         await _broadcast({"type": "log", "log": log_message, "instruction": audio_instruction, "mode": active_mode})
                         if is_currently_safe: 
                             h_type = log_message.replace("HAZARD DETECTED: ", "").split("!")[0]
-                            asyncio.create_task(asyncio.to_thread(database.log_hazard, h_type, current_location[0], current_location[1]))
+                            # PASS THE CAPTURED USER_ID TO DB
+                            asyncio.create_task(asyncio.to_thread(database.log_hazard, h_type, current_location[0], current_location[1], global_user_id))
                         is_currently_safe = False 
                     elif log_message.startswith("SAFE"):
                         if not is_currently_safe:
@@ -501,7 +529,7 @@ async def background_ai_worker():
                             is_currently_safe = True
 
                 if nav_session.active:
-                    instr = nav_session.process_location(current_location[0], current_location[1])
+                    instr = nav_session.process_location(current_location[0], current_location[1], current_heading)
                     if instr:
                         await stream_audio_to_glasses(instr, preemptive=False)
                         await _broadcast({"type": "log", "log": f"NAVIGATION: {instr}", "instruction": instr, "mode": active_mode})
@@ -557,7 +585,7 @@ async def edge_endpoint(websocket: WebSocket):
                         if energy > 200:
                             time_since_last_speech = time.time()
                             if is_glasses_awake:
-                                hardware_wake_timer = time.time() # Refresh backend timer when noise is made!
+                                hardware_wake_timer = time.time()
                             if not is_speaking:
                                 is_speaking = True
                                 
@@ -603,35 +631,29 @@ async def edge_endpoint(websocket: WebSocket):
 async def process_voice_in_background(audio_data, websocket):
     global is_glasses_awake, active_mode, accumulated_command, is_processing_audio, hardware_wake_timer
     
-    is_processing_audio = True # Lock out the sleep timer while Google translates
+    is_processing_audio = True
     
     try:
         text = await asyncio.to_thread(voice_engine.process_raw_pcm, audio_data)
         if not text: return
-        
         print(f"[VOICE] Heard: '{text}'")
         
-        # Removed "hey" and "wake up" to prevent accidental triggers from normal conversation.
         wake_words = ["glasses", "hey", "hey glasses", "play glasses", "okay glasses", "hey glass", "play glass", "okay glass"]
-        
         just_woke_up = False
         
-        # 1. Look for Wake Word ONLY if we are currently asleep
         if not is_glasses_awake:
             for ww in wake_words:
                 if ww in text:
                     is_glasses_awake = True
                     just_woke_up = True
-                    hardware_wake_timer = time.time() # Start the absolute 9-second timer
+                    hardware_wake_timer = time.time() 
                     await _broadcast({"type": "status", "is_awake": True, "device_connected": True, "mode": active_mode})
                     
-                    # Strip the wake word out
                     parts = text.split(ww)
                     text = parts[-1].strip()
-                    accumulated_command = "" # Reset the stitcher
+                    accumulated_command = "" 
                     break 
 
-        # If it's still asleep, ignore the audio completely!
         if not is_glasses_awake:
             return
 
@@ -639,30 +661,23 @@ async def process_voice_in_background(audio_data, websocket):
             await stream_audio_to_glasses("I am listening.")
             return
 
-        # 2. Command Stitching & Strict Siri-Style Rejection
         if is_glasses_awake and text:
-            hardware_wake_timer = time.time() # Reset timer because they spoke
-            
-            # Stitch the new text onto whatever we've heard so far
+            hardware_wake_timer = time.time() 
             accumulated_command += " " + text
             accumulated_command = accumulated_command.strip()
-            
-            print(f"[VOICE] Formulating: '{accumulated_command}'")
             
             cmd_payload = voice_engine.parse_command(accumulated_command)
             
             if cmd_payload:
                 if cmd_payload.get("command") == "INVALID_SEARCH":
-                    pass # Just wait. The user might have said "search for..." and paused.
+                    pass 
                 else:
-                    # SUCCESS! Execute and go straight to sleep.
                     is_glasses_awake = False
                     accumulated_command = ""
+                    cmd_payload["user_id"] = "" 
                     await _handle_dashboard_command(websocket, cmd_payload)
                     await _broadcast({"type": "status", "is_awake": False, "device_connected": True, "mode": active_mode})
             else:
-                # The user finished speaking a sentence (VAD triggered) but it wasn't a valid command.
-                # Just like Siri, say "I don't understand" and force the mic BACK TO SLEEP instantly.
                 is_glasses_awake = False
                 bad_command = accumulated_command
                 accumulated_command = "" 
@@ -678,14 +693,24 @@ async def process_voice_in_background(audio_data, websocket):
     except Exception as e:
         print(f"[VOICE ERROR] {e}")
     finally:
-        is_processing_audio = False # Unlock the timer
-
+        is_processing_audio = False
 
 async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) -> None:
     global latest_frame, active_mode, nav_session, current_location, target_tool_name
     global is_glasses_awake, accumulated_command, hardware_wake_timer, frontend_mic_active
+    global global_user_id 
 
     command = str(data.get("command", "")).upper().strip()
+    
+    # 1. CAPTURE THE USER ID
+    incoming_user_id = data.get("user_id", "")
+    if incoming_user_id:
+        global_user_id = incoming_user_id
+
+    # If this was just an initialization handshake, stop here!
+    if command == "SYNC_USER":
+        print(f"[SYSTEM] Master ID locked for backend processing: {global_user_id}")
+        return
 
     if command in {"MODE_NORMAL", "MODE_NAVIGATION", "MODE_OCR", "MODE_TOOL"}:
         active_mode = command.replace("MODE_", "")
@@ -723,7 +748,11 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
         if latest_frame is None: return
         msg = "Syncing tools with cloud..."
         await stream_audio_to_glasses(msg); await _broadcast({"type": "log", "log": msg, "instruction": msg, "mode": active_mode})
-        db_tools = await asyncio.to_thread(database.get_all_tools)
+        
+        # USE THE CAPTURED ID HERE
+        db_tools = await asyncio.to_thread(database.get_all_tools, global_user_id)
+        if db_tools is None: db_tools = []
+        
         global cached_tool_map
         cached_tool_map = {t["tool_name"].lower().replace(" ", "_"):t["tool_name"] for t in db_tools}
         msg = "Scanning area..."
@@ -794,7 +823,11 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
             msg = f"Initiating search and guidance for {target}."
             await stream_audio_to_glasses(msg)
             await _broadcast({"type": "log", "log": msg, "instruction": msg, "mode": active_mode})
-            db_tools = await asyncio.to_thread(database.get_all_tools)
+            
+            # USE THE CAPTURED ID HERE
+            db_tools = await asyncio.to_thread(database.get_all_tools, global_user_id)
+            if db_tools is None: db_tools = []
+            
             cached_tool_map = {t["tool_name"].lower().replace(" ", "_"): t["tool_name"] for t in db_tools}
         return
     if command == "SEARCH_STOP":
@@ -806,18 +839,13 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
             await _broadcast({"type": "log", "log": msg, "instruction": msg, "mode": active_mode})
         return
 
-    # --- THE MUTINY FIX ---
     if command == "DASHBOARD_WAKE":
         awake_state = data.get("state", False)
-
-        # REJECT the frontend's strict timer if we are actively using the hardware mic
         if not awake_state and not frontend_mic_active:
-            return # Ignore! The backend's new 9-second loop will handle the sleep timeout.
-
+            return 
         if is_glasses_awake and not awake_state:
             await stream_audio_to_glasses("Listener went back to sleep.", preemptive=False)
-            accumulated_command = ""
-                
+            accumulated_command = ""      
         is_glasses_awake = awake_state
         if is_glasses_awake: hardware_wake_timer = time.time()
         print(f"[SYNC] Hardware Mic Wake State set to: {is_glasses_awake}")
