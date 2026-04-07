@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, Lock, Cpu, Bell, ShieldCheck, Camera, Save, Mail, Smartphone, Briefcase, Sliders, Monitor, Volume2, DatabaseBackup, Clock, ChevronDown } from 'lucide-react';
+import { User, Lock, Cpu, Bell, ShieldCheck, Camera, Save, Mail, Smartphone, Briefcase, Sliders, Monitor, Volume2, DatabaseBackup, Clock, ChevronDown, Settings } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { API_BASE_URL } from '../config';
 
@@ -286,7 +286,7 @@ function SettingsPage() {
           <div>
             <h1 style={{ margin: 0, fontSize: 'clamp(28px, 4vw, 38px)', fontWeight: '900', letterSpacing: '-1.5px' }}>System <span style={{ color: '#00E5FF' }}>Settings</span></h1>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', color: '#94a3b8' }}>
-              <ShieldCheck size={16} color="#10b981" />
+              <Settings size={16} color="#10b981" />
               <span style={{ fontSize: '14px', fontWeight: '500' }}>Manage preferences and hardware configuration</span>
             </div>
           </div>
