@@ -132,6 +132,9 @@ hardware_wake_timer = 0
 accumulated_command = ""      
 is_processing_audio = False   
 
+unpaired_devices_waiting = {}
+active_user_rooms = {}
+
 training_queue = asyncio.Queue()
 
 @app.on_event("startup")
@@ -166,23 +169,31 @@ async def background_training_worker():
             print(f"[QUEUE] Finished processing '{tool_name}'. Waiting for next job...")
 
 async def hardware_watchdog():
-    global edge_device_ws, latest_frame, global_ai_task, active_mode
+    global edge_device_ws, latest_frame, global_ai_task, active_mode, active_user_rooms
     while True:
         await asyncio.sleep(2) 
         if edge_device_ws is not None:
             time_since_last_frame = time.time() - last_frame_received_time
+            # If no data for 3.5s, the glasses died abruptly
             if time_since_last_frame > 3.5:
                 print(f"[WATCHDOG] ESP32 timed out. No data for {time_since_last_frame:.1f}s.")
                 try: await edge_device_ws.close()
                 except: pass
+                
+                # FORCE WIPE EVERYTHING
                 edge_device_ws = None
                 latest_frame = None
+                active_user_rooms.clear() # This explicitly tells the API the user is offline
+                
                 if global_ai_task: global_ai_task.cancel()
+                
                 disconn_msg = "Hardware connection lost. Navigation paused." if active_mode == "NAVIGATION" else "Hardware connection lost."
-                await _broadcast({
+                
+                # Broadcast the offline status instantly
+                asyncio.create_task(_broadcast({
                     "type": "status", "device_connected": False, "mode": active_mode, 
                     "log": "CRITICAL: Connection Lost (Timeout).", "instruction": disconn_msg
-                })
+                }))
 
 def _decode_video_frame(raw_bytes: bytes) -> Optional[np.ndarray]:
     np_arr = np.frombuffer(raw_bytes, np.uint8)
@@ -303,6 +314,59 @@ async def _background_safety_ocr(clean_frame: np.ndarray, current_mode: str):
             asyncio.create_task(asyncio.to_thread(database.log_hazard, f"SIGN: {kw_str}", current_location[0], current_location[1], global_user_id))
     except Exception as e:
         print(f"[OCR ERROR] {e}")
+
+@app.get("/api/hardware/status")
+def get_hardware_status(user_id: str = Depends(verify_supabase_token)):
+    # Check if this user has a hardware ID in the DB
+    response = database.supabase.table('profiles').select('hardware_id').eq('id', user_id).single().execute()
+    hw_id = response.data.get('hardware_id') if response.data else None
+    
+    if hw_id:
+        is_online = user_id in active_user_rooms
+        return {"paired": True, "device_id": hw_id, "online": is_online}
+    else:
+        # Not paired. Return list of available glasses waiting to be paired
+        waiting_macs = list(unpaired_devices_waiting.keys())
+        return {"paired": False, "devices_waiting": waiting_macs}
+
+@app.post("/api/hardware/pair")
+async def pair_hardware(payload: dict, user_id: str = Depends(verify_supabase_token)):
+    mac_to_pair = payload.get("mac_address")
+    if not mac_to_pair or mac_to_pair not in unpaired_devices_waiting:
+        raise HTTPException(status_code=400, detail="Device not found or offline.")
+
+    if database.link_hardware_to_user(user_id, mac_to_pair):
+        ws = unpaired_devices_waiting.pop(mac_to_pair)
+        active_user_rooms[user_id] = ws
+        global edge_device_ws
+        edge_device_ws = ws
+        
+        try:
+            await ws.send_text("STATUS: PAIRED")
+        except Exception as e:
+            print(f"Error sending pair status to glasses: {e}")
+            
+        return {"status": "success"}
+    
+    raise HTTPException(status_code=500, detail="Failed to pair in database.")
+
+@app.post("/api/hardware/unpair")
+async def unpair_hardware(user_id: str = Depends(verify_supabase_token)):
+    global edge_device_ws
+    
+    # 1. Send wipe command to glasses if they are online
+    if user_id in active_user_rooms:
+        ws = active_user_rooms[user_id]
+        try:
+            await ws.send_text("COMMAND: RESET_WIFI")
+        except Exception: pass
+        del active_user_rooms[user_id]
+        
+    edge_device_ws = None # Disconnect global worker
+    
+    # 2. Wipe from DB
+    database.unlink_hardware(user_id)
+    return {"status": "success", "message": "Device unpaired and reset"}
 
 @app.get("/video_feed")
 async def video_feed():
@@ -547,14 +611,40 @@ async def background_ai_worker():
 
 
 @app.websocket("/ws")
-async def edge_endpoint(websocket: WebSocket):
+async def edge_endpoint(websocket: WebSocket, mac: str = Query(None)):
     global latest_frame, edge_device_ws, raw_frame_buffer, global_ai_task, last_frame_received_time, hardware_watchdog_task
     global audio_buffer, last_audio_time, is_speaking, time_since_last_speech, hardware_wake_timer
     
+    if not mac:
+        await websocket.close(reason="Hardware MAC ID required")
+        return
+
     if global_ai_task is not None: global_ai_task.cancel()
     await websocket.accept()
-    edge_device_ws = websocket
-    print("[SUCCESS] ESP32 Edge Device Connected!")
+    print(f"[HARDWARE] Device {mac} connected.")
+
+    # Check if this glasses MAC address belongs to anyone
+    owner_id = database.get_owner_by_hardware_id(mac)
+
+    if owner_id:
+        print(f"Device belongs to User: {owner_id}")
+        active_user_rooms[owner_id] = websocket
+        edge_device_ws = websocket 
+    else:
+        print(f"Device {mac} is Unpaired. Putting in waiting room.")
+        unpaired_devices_waiting[mac] = websocket
+        await websocket.send_text("STATUS: WAITING_FOR_PAIR")
+        
+        # Keep connection open but paused until user clicks "Pair" in frontend
+        try:
+            while True:
+                await asyncio.sleep(1)
+                if mac not in unpaired_devices_waiting:
+                    break # Device was successfully paired!
+        except WebSocketDisconnect:
+            if mac in unpaired_devices_waiting:
+                del unpaired_devices_waiting[mac]
+            return
     
     last_frame_received_time = time.time()
     if hardware_watchdog_task is None or hardware_watchdog_task.done():
@@ -566,7 +656,7 @@ async def edge_endpoint(websocket: WebSocket):
     try:
         while True:
             try: data = await websocket.receive()
-            except RuntimeError: break 
+            except RuntimeError: break # Break loop if the connection abruptly drops
 
             last_frame_received_time = time.time()
 
@@ -622,10 +712,22 @@ async def edge_endpoint(websocket: WebSocket):
                             "type": "status", "device_connected": True, "mode": active_mode, "location": {"lat": current_location[0], "lon": current_location[1]}
                         })
                 except Exception: pass
-    except WebSocketDisconnect:
+                
+    except Exception as e:
+        print(f"WebSocket closed or dropped: {e}")
+    finally:
+        if mac in unpaired_devices_waiting:
+            del unpaired_devices_waiting[mac]
+            
+        if owner_id and owner_id in active_user_rooms:
+            del active_user_rooms[owner_id]
+            
         edge_device_ws = None
+        
         if global_ai_task: global_ai_task.cancel() 
-        await _broadcast({"type": "status", "device_connected": False, "log": "WARNING: ESP32 Disconnected."})
+        
+        # Safely broadcast the offline status
+        asyncio.create_task(_broadcast({"type": "status", "device_connected": False, "log": "WARNING: ESP32 Disconnected."}))
 
 
 async def process_voice_in_background(audio_data, websocket):

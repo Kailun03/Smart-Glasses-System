@@ -2,25 +2,19 @@
 #include <WiFi.h>
 #include <WebSocketsClient.h>
 #include <driver/i2s.h>
-#include <TinyGPS++.h>
+#include <WiFiManager.h>
 
 // ==========================================
-// 1. WiFi Credentials
+// WebSocket Configuration
 // ==========================================
-const char* ssid = "Teoh";
-const char* password = "Kailun2003";
-
-// ==========================================
-// 2. WebSocket Configuration
-// ==========================================
-const char* ws_host = "dodge-designers-sitemap-spatial.trycloudflare.com";
+const char* ws_host = "beijing-tiles-binding-street.trycloudflare.com";
 const int ws_port = 443; 
 const char* ws_url = "/ws";
 
 WebSocketsClient webSocket;
 
 // ==========================================
-// 3. PIN DEFINITIONS (ESP32-S3 Standard)
+// PIN DEFINITIONS (ESP32-S3 Standard)
 // ==========================================
 #define PWDN_GPIO_NUM     -1
 #define RESET_GPIO_NUM    -1
@@ -40,22 +34,12 @@ WebSocketsClient webSocket;
 #define PCLK_GPIO_NUM     13
 
 // ==========================================
-// 4. AUDIO PIN DEFINITIONS
+// AUDIO PIN DEFINITIONS
 // ==========================================
 #define I2S_BCLK    41
 #define I2S_LRC     40
 #define I2S_DOUT    42
 #define I2S_MIC_SD  1
-
-// ==========================================
-// 5. GPS PIN DEFINITIONS
-// ==========================================
-#define GPS_RX_PIN 39
-#define GPS_TX_PIN 38
-
-TinyGPSPlus gps;
-HardwareSerial gpsSerial(1); 
-unsigned long last_gps_time = 0;
 
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
@@ -65,6 +49,20 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     case WStype_CONNECTED:
       Serial.println("SUCCESS: WebSocket Connected to Python Server!");
       break;
+    case WStype_TEXT: {
+      String msg = (char*)payload;
+      Serial.printf("Received Text: %s\n", msg.c_str());
+      
+      // If user unpairs from dashboard, erase WiFi and reboot
+      if (msg == "COMMAND: RESET_WIFI") {
+        Serial.println("Reset command received! Erasing WiFi credentials...");
+        WiFiManager wm;
+        wm.resetSettings(); // Wipes the saved password from flash memory
+        delay(1000);
+        ESP.restart();      // Reboots the ESP32 to trigger Phase 1 (Captive Portal)
+      }
+      break;
+    }
     case WStype_BIN:
       size_t bytes_written;
       i2s_write(I2S_NUM_0, payload, length, &bytes_written, portMAX_DELAY);
@@ -109,10 +107,6 @@ void setup() {
   // Initialize Speaker
   initAudio();
 
-  // Initialize GPS Serial Communication
-  gpsSerial.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
-  Serial.println("[INFO] GY-NEO-6M GPS Initialized.");
-
   // Camera Config
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -155,18 +149,34 @@ void setup() {
       s->set_hmirror(s, 1);
   }
 
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting to WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  // Initialize WiFiManager
+  WiFiManager wm;
+  
+  // Set a timeout so it doesn't wait in the portal forever if power restarts
+  wm.setConfigPortalTimeout(180); // 3 minutes timeout
+  
+  Serial.println("Starting WiFiManager. Connect to 'AURA_SETUP_GLASSES' on your phone if not paired.");
+  
+  // This automatically connects to saved WiFi OR opens the portal "AURA_SETUP_GLASSES"
+  if (!wm.autoConnect("AURA_SETUP_GLASSES")) {
+    Serial.println("Failed to connect and hit timeout. Rebooting...");
+    delay(3000);
+    ESP.restart(); // Restart and try again
   }
-  Serial.println("\nWiFi connected");
+  
+  Serial.println("\nWiFi connected successfully!");
 
-  webSocket.beginSSL(ws_host, ws_port, ws_url);
+  // 1. Grab the ESP32's unique MAC Address
+  String mac_address = WiFi.macAddress();
+  
+  // 2. Append it to the WebSocket URL
+  String full_ws_url = String(ws_url) + "?mac=" + mac_address;
+  Serial.println("Connecting to Server with MAC: " + mac_address);
+
+  // 3. Connect using the new dynamic URL
+  webSocket.beginSSL(ws_host, ws_port, full_ws_url.c_str());
   webSocket.onEvent(webSocketEvent);
-  webSocket.setReconnectInterval(5000); 
+  webSocket.setReconnectInterval(5000);
   webSocket.enableHeartbeat(15000, 5000, 3);
 }
 
@@ -191,8 +201,7 @@ void loop() {
   i2s_read(I2S_NUM_0, &mic_samples, sizeof(mic_samples), &bytes_read, 0); 
   
   if (bytes_read > 0) {
-    int num_samples = bytes_read / 2; // 16-bit audio = 2 bytes per sample
-
+    int num_samples = bytes_read / 2;
     // Apply Digital Amplification
     for (int i = 0; i < num_samples; i++) {
       int32_t amplified = mic_samples[i] * MIC_GAIN;
@@ -208,11 +217,6 @@ void loop() {
     webSocket.sendBIN((uint8_t*)mic_samples, bytes_read);
   }
 
-  // Read GPS Data constantly in the background
-  while (gpsSerial.available() > 0) {
-    gps.encode(gpsSerial.read());
-  }
-
   // Send Video Frames at 15 FPS
   if (current_time - last_transmission >= FRAME_DELAY) {
       camera_fb_t * fb = esp_camera_fb_get();
@@ -222,38 +226,6 @@ void loop() {
         last_transmission = millis(); 
       }
   }
-
-  // Send GPS Data every 2 seconds
-  // if (current_time - last_gps_time > 2000) {
-      
-  //     // We use static variables to remember the count from 2 seconds ago
-  //     static uint32_t last_chars_processed = 0;
-  //     uint32_t current_chars = gps.charsProcessed();
-
-  //     // DIAGNOSTIC 1: Is the wire actually plugged in right now?
-  //     if (current_chars == last_chars_processed) {
-  //         Serial.println("[GPS CRITICAL] WIRE DISCONNECTED! No new data flowing to ESP32.");
-  //     } 
-  //     // DIAGNOSTIC 2: The wire is plugged in, but is it backward?
-  //     else if (gps.passedChecksum() == 0) {
-  //         Serial.println("[GPS ERROR] Receiving garbage noise. Swap TX and RX wires!");
-  //     }
-  //     // DIAGNOSTIC 3: Wiring is perfect, waiting on space.
-  //     else if (!gps.location.isValid()) {
-  //         Serial.print("[GPS STATUS] Wiring PERFECT. Searching the sky... Satellites: ");
-  //         Serial.println(gps.satellites.value());
-  //     } 
-  //     // DIAGNOSTIC 4: Success!
-  //     else {
-  //         char jsonPayload[100];
-  //         snprintf(jsonPayload, sizeof(jsonPayload), "{\"type\":\"gps\", \"lat\":%.6f, \"lon\":%.6f}", gps.location.lat(), gps.location.lng());
-  //         webSocket.sendTXT(jsonPayload);
-  //         Serial.println("[GPS SUCCESS] Coordinates sent to server.");
-  //     }
-      
-  //     last_chars_processed = current_chars;
-  //     last_gps_time = current_time;
-  // }
 
   delay(1); 
 }

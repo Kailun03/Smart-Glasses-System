@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, Lock, Cpu, Bell, ShieldCheck, Camera, Save, Mail, Smartphone, Briefcase, Sliders, Monitor, Volume2, DatabaseBackup, Clock, ChevronDown, Settings } from 'lucide-react';
+import { User, Lock, Cpu, Bell, ShieldCheck, Camera, Save, Mail, Smartphone, Briefcase, Sliders, Monitor, Volume2, DatabaseBackup, Clock, ChevronDown, Settings, Wifi, CheckCircle, AlertTriangle, RefreshCw, Trash2 } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { API_BASE_URL } from '../config';
 
@@ -9,6 +9,9 @@ function SettingsPage() {
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [session, setSession] = useState(null);
   const [message, setMessage] = useState({ text: '', type: '' }); 
+  const [hardwareStatus, setHardwareStatus] = useState({ paired: false, device_id: null, online: false, devices_waiting: [] });
+  const [selectedMac, setSelectedMac] = useState("");
+  const [hardwareLoading, setHardwareLoading] = useState(true);
 
   // Expanded State with new settings
   const [formData, setFormData] = useState({
@@ -31,12 +34,51 @@ function SettingsPage() {
     dataRetention: '90' // New
   });
 
+  const fetchHardwareStatus = async (token, isBackground = false) => {
+    if (!isBackground) {
+      setHardwareLoading(true);
+    }
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/hardware/status`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (!response.ok) {
+        console.error("Hardware API rejected request:", await response.text());
+        return; 
+      }
+      
+      const data = await response.json();
+      setHardwareStatus(data);
+      
+      if (data.devices_waiting && data.devices_waiting.length > 0) {
+        setSelectedMac(prevMac => {
+          if (!prevMac || !data.devices_waiting.includes(prevMac)) {
+            return data.devices_waiting[0];
+          }
+          return prevMac;
+        });
+      } else {
+        setSelectedMac("")
+      }
+    } catch (error) {
+      console.error("Failed to fetch hardware status:", error);
+    } finally {
+      if (!isBackground) {
+        setHardwareLoading(false);
+      }
+    }
+  };
+
   useEffect(() => {
     const fetchUserData = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         setSession(session);
-        
+         
+        fetchHardwareStatus(session.access_token);
+
         // 1. Fetch Profile Data
         const { data: profileData } = await supabase
           .from('profiles')
@@ -77,6 +119,22 @@ function SettingsPage() {
     };
     fetchUserData();
   }, []);
+  
+  useEffect(() => {
+    let intervalId;
+    
+    if (activeTab === 'hardware') {
+      intervalId = setInterval(() => {
+        if (session?.access_token) {
+          fetchHardwareStatus(session.access_token, true);
+        }
+      }, 3000);
+    }
+    
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [activeTab, session]);
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -157,6 +215,63 @@ function SettingsPage() {
     } finally {
       setIsLoading(false);
       setTimeout(() => setMessage({ text: '', type: '' }), 4000);
+    }
+  };
+
+  const handlePair = async () => {
+    if (!selectedMac) return alert("Please select a device to pair.");
+    
+    try {
+      // 1. Ask Supabase for the active session right now
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return alert("No active session. Please log in again.");
+
+      // 2. Extract the exact JWT string
+      const token = session.access_token;
+
+      // 3. Send it to the backend
+      const response = await fetch(`${API_BASE_URL}/api/hardware/pair`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}` 
+        },
+        body: JSON.stringify({ mac_address: selectedMac })
+      });
+      
+      if (response.ok) {
+        alert("Glasses Paired Successfully!");
+        fetchHardwareStatus(token);
+      } else {
+        const errData = await response.json();
+        alert(`Failed to pair: ${errData.detail || "Unknown error"}`);
+      }
+    } catch (error) {
+      console.error("Pairing error:", error);
+    }
+  };
+
+  const handleUnpair = async () => {
+    if (!window.confirm("WARNING: Unpairing will Factory Reset the glasses. They will disconnect from the current Wi-Fi and return to Setup Mode. Are you absolutely sure?")) return;
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return alert("No active session. Please log in again.");
+
+      const token = session.access_token;
+      const response = await fetch(`${API_BASE_URL}/api/hardware/unpair`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (response.ok) {
+        setMessage({ text: 'Device Unpaired and Wi-Fi Erased.', type: 'success' });
+        fetchHardwareStatus(token);
+      } else {
+        setMessage({ text: 'Failed to unpair device.', type: 'error' });
+      }
+    } catch (error) {
+      console.error("Unpairing error:", error);
     }
   };
 
@@ -337,7 +452,7 @@ function SettingsPage() {
                       <style>{`@keyframes spin { 100% { transform: rotate(360deg); } }`}</style>
                     </div>
                     <div>
-                      <div style={{ fontSize: '14px', fontWeight: '800', color: '#f8fafc', marginBottom: '6px' }}>Upload New Avatar</div>
+                      <div style={{ fontSize: '14px', fontWeight: '800', color: '#f8fafc', marginBottom: '6px' }}>Profile Avatar</div>
                       <div style={{ fontSize: '12px', color: '#64748b' }}>Click the circle to browse (JPG or PNG)</div>
                     </div>
                   </div>
@@ -408,6 +523,100 @@ function SettingsPage() {
                 <div className="animate-slide-up">
                   <h2 style={{ fontSize: '20px', fontWeight: '800', marginBottom: '32px', color: '#fff' }}>Edge Hardware Integration</h2>
                   
+                  {/* --- HARDWARE CONNECTION SECTION --- */}
+                  <div style={{ padding: '24px', background: 'rgba(0,0,0,0.2)', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)', marginBottom: '30px', position: 'relative', overflow: 'hidden' }}>
+                    {/* Glowing Top Border based on status */}
+                    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '2px', background: hardwareStatus.paired ? '#10b981' : '#00E5FF' }}></div>
+                    
+                    <h3 style={{ marginTop: 0, fontSize: '16px', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Wifi size={20} color={hardwareStatus.paired ? "#10b981" : "#00E5FF"} /> 
+                      Smart Glasses Status
+                    </h3>
+                    
+                    {hardwareLoading && !hardwareStatus.devices_waiting ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#64748b', marginTop: '20px' }}>
+                        <RefreshCw size={16} className="animate-spin" /> Fetching hardware telemetry...
+                      </div>
+                    ) : hardwareStatus.paired ? (
+                      
+                      // PAIRED UI
+                      <div className="animate-slide-up" style={{ marginTop: '20px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(16, 185, 129, 0.05)', border: '1px solid rgba(16, 185, 129, 0.2)', padding: '16px', borderRadius: '12px' }}>
+                          <div>
+                            <div style={{ fontSize: '12px', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '12px' }}>Linked Device</div>
+                            <div style={{ fontSize: '16px', fontWeight: '800', color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <CheckCircle size={16} color="#10b981" /> {hardwareStatus.device_id}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: '12px', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '12px' }}>Connection Status</div>
+                            <div style={{ fontSize: '14px', fontWeight: '800', color: hardwareStatus.online ? '#10b981' : '#ef4444' }}>
+                              {hardwareStatus.online ? '🟢 ONLINE' : '🔴 OFFLINE'}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ marginTop: '20px', padding: '16px', background: 'rgba(239, 68, 68, 0.05)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: '12px' }}>
+                          <div style={{ fontSize: '13px', color: '#ef4444', marginBottom: '12px', display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                            <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: '2px' }} />
+                            Unpairing will factory reset the glasses. You will need to reconnect them to your mobile hotspot via the Captive Portal.
+                          </div>
+                          <button onClick={handleUnpair} style={{ background: 'transparent', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.5)', padding: '10px 16px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', transition: '0.2s' }} onMouseOver={(e) => e.target.style.background='rgba(239, 68, 68, 0.1)'} onMouseOut={(e) => e.target.style.background='transparent'}>
+                            <Trash2 size={16} /> FACTORY RESET & UNPAIR
+                          </button>
+                        </div>
+                      </div>
+
+                    ) : (
+                      
+                      // UNPAIRED / WAITING UI
+                      <div className="animate-slide-up" style={{ marginTop: '20px' }}>
+                        <p style={{ color: '#94a3b8', fontSize: '14px', marginBottom: '20px' }}>No smart glasses are currently linked to your profile.</p>
+                        
+                        {hardwareStatus.devices_waiting?.length > 0 ? (
+                          <div style={{ background: 'rgba(0, 229, 255, 0.05)', border: '1px dashed rgba(0, 229, 255, 0.3)', padding: '20px', borderRadius: '12px' }}>
+                            <p style={{ marginBottom: '12px', fontSize: '14px', color: '#00E5FF', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <RefreshCw size={16} className="animate-spin" /> Discovered Devices in Setup Mode
+                            </p>
+                            <div style={{ display: 'flex', gap: '20px' }}>
+                              <div className="custom-select-wrapper" style={{ flex: 1, position: 'relative' }}>
+                                <select 
+                                  value={selectedMac} 
+                                  onChange={(e) => setSelectedMac(e.target.value)}
+                                  className="custom-input"
+                                  style={{ paddingLeft: '20px' }}
+                                >
+                                  {hardwareStatus.devices_waiting.map(mac => (
+                                    <option key={mac} value={mac}>MAC: {mac}</option>
+                                  ))}
+                                </select>
+                                <ChevronDown size={16} color="#64748b" style={{ position: 'absolute', right: '16px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+                              </div>
+                              <div style={{margin: '6px 0', alignItems: 'center'}}>
+                              <button 
+                                onClick={handlePair}
+                                className="launch-btn"
+                                style={{ width: 'auto', padding: '12px 24px', borderRadius: '30px' }}
+                              >
+                                PAIR DEVICE
+                              </button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ padding: '20px', background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.1)', borderRadius: '12px', textAlign: 'center' }}>
+                            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '12px' }}>
+                              <RefreshCw size={24} color="#64748b" className="animate-spin" />
+                            </div>
+                            <p style={{ margin: 0, fontSize: '14px', color: '#94a3b8' }}>Scanning for local devices...</p>
+                            <p style={{ margin: '8px 0 0 0', fontSize: '12px', color: '#64748b' }}>Turn on your glasses and configure the Wi-Fi via your mobile hotspot to begin.</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <style>{`@keyframes spin { 100% { transform: rotate(360deg); } } .animate-spin { animation: spin 2s linear infinite; }`}</style>
+
                   <div className="toggle-container">
                     <div>
                       <div style={{ fontSize: '15px', fontWeight: '800', color: '#fff', display: 'flex', alignItems: 'center', gap: '10px' }}><Smartphone size={16} color="#00E5FF"/> Auto-Connect on Proximity</div>

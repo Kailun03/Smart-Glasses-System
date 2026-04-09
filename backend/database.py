@@ -137,3 +137,32 @@ def update_user_settings(user_id: str, settings_data: dict):
     except Exception as e:
         print(f"[DB ERROR] Failed to update settings: {e}")
         raise e
+
+def link_hardware_to_user(user_id: str, mac_address: str) -> bool:
+    """Links the ESP32 MAC address to the user's profile."""
+    try:
+        supabase.table('profiles').update({'hardware_id': mac_address}).eq('id', user_id).execute()
+        return True
+    except Exception as e:
+        print(f"[DB ERROR] Link Hardware: {e}")
+        return False
+
+def unlink_hardware(user_id: str) -> bool:
+    """Removes the hardware MAC address from the user's profile."""
+    try:
+        supabase.table('profiles').update({'hardware_id': None}).eq('id', user_id).execute()
+        return True
+    except Exception as e:
+        print(f"[DB ERROR] Unlink Hardware: {e}")
+        return False
+
+def get_owner_by_hardware_id(mac_address: str):
+    """Checks if a MAC address belongs to any user."""
+    try:
+        response = supabase.table('profiles').select('id').eq('hardware_id', mac_address).execute()
+        if response.data and len(response.data) > 0:
+            return response.data[0]['id']
+        return None
+    except Exception as e:
+        print(f"[DB ERROR] Get Owner: {e}")
+        return None
