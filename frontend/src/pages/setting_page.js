@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { User, Lock, Cpu, Bell, ShieldCheck, Camera, Save, Mail, Smartphone, Briefcase, Sliders, Monitor, Volume2, DatabaseBackup, Clock, ChevronDown, Settings, Wifi, CheckCircle, AlertTriangle, RefreshCw, Trash2 } from 'lucide-react';
+import { User, Lock, Cpu, Bell, ShieldCheck, Camera, Save, Mail, Briefcase, Sliders, DatabaseBackup, Clock, ChevronDown, Settings, Wifi, CheckCircle, AlertTriangle, RefreshCw, Trash2 } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { API_BASE_URL } from '../config';
 
@@ -19,19 +19,17 @@ function SettingsPage() {
     fullName: '',
     email: '',
     avatarUrl: '',
-    jobTitle: 'Safety Inspector', // New
+    jobTitle: 'Unspecified Role',
     // Security
     newPassword: '',
     confirmPassword: '',
-    sessionTimeout: '30', // New
+    sessionTimeout: '30',
     // Hardware
-    autoConnect: true,
-    confidenceThreshold: 75, // New (YOLO AI Confidence)
-    streamResolution: '720p', // New
+    confidenceThreshold: 75,
     // Preferences
     notifications: true,
-    audioAlerts: true, // New
-    dataRetention: '90' // New
+    dataRetention: '90',
+    distanceUnit: 'metric'
   });
 
   const fetchHardwareStatus = async (token, isBackground = false) => {
@@ -100,16 +98,15 @@ function SettingsPage() {
           });
           if (res.ok) {
             const settings = await res.json();
+            localStorage.setItem('sessionTimeout', settings.session_timeout ?? '30');
             setFormData(prev => ({
               ...prev,
-              autoConnect: settings.auto_connect ?? true,
               notifications: settings.notifications ?? true,
               confidenceThreshold: settings.confidence_threshold ?? 75,
-              streamResolution: settings.stream_resolution ?? '720p',
-              audioAlerts: settings.audio_alerts ?? true,
               sessionTimeout: settings.session_timeout ?? '30',
               dataRetention: settings.data_retention ?? '90',
-              jobTitle: settings.job_title ?? 'Safety Inspector'
+              jobTitle: settings.job_title ?? 'Unspecified Role',
+              distanceUnit: settings.distance_unit ?? 'metric'
             }));
           }
         } catch (error) {
@@ -191,14 +188,12 @@ function SettingsPage() {
       
       // Save ALL preferences to FastAPI
       const payload = { 
-        auto_connect: formData.autoConnect, 
         notifications: formData.notifications,
         confidence_threshold: formData.confidenceThreshold,
-        stream_resolution: formData.streamResolution,
-        audio_alerts: formData.audioAlerts,
         session_timeout: formData.sessionTimeout,
         data_retention: formData.dataRetention,
-        job_title: formData.jobTitle
+        job_title: formData.jobTitle,
+        distance_unit: formData.distanceUnit
       };
       
       const res = await fetch(`${API_BASE_URL}/api/settings`, {
@@ -587,7 +582,7 @@ function SettingsPage() {
                                   style={{ paddingLeft: '20px' }}
                                 >
                                   {hardwareStatus.devices_waiting.map(mac => (
-                                    <option key={mac} value={mac}>MAC: {mac}</option>
+                                    <option key={mac} value={mac}>Device ID: {mac}</option>
                                   ))}
                                 </select>
                                 <ChevronDown size={16} color="#64748b" style={{ position: 'absolute', right: '16px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
@@ -617,17 +612,6 @@ function SettingsPage() {
                   </div>
                   <style>{`@keyframes spin { 100% { transform: rotate(360deg); } } .animate-spin { animation: spin 2s linear infinite; }`}</style>
 
-                  <div className="toggle-container">
-                    <div>
-                      <div style={{ fontSize: '15px', fontWeight: '800', color: '#fff', display: 'flex', alignItems: 'center', gap: '10px' }}><Smartphone size={16} color="#00E5FF"/> Auto-Connect on Proximity</div>
-                      <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>Automatically link smart glasses when WebSocket is available.</div>
-                    </div>
-                    <label className="switch">
-                      <input type="checkbox" name="autoConnect" checked={formData.autoConnect} onChange={handleInputChange} />
-                      <span className="slider"></span>
-                    </label>
-                  </div>
-
                   <div className="range-container" style={{ marginTop: '30px', background: 'rgba(0,0,0,0.2)', padding: '20px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.03)' }}>
                     <label className="input-label" style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '14px', color: '#fff' }}>
                       <Sliders size={16} color="#a855f7" /> YOLO Detection Confidence 
@@ -635,24 +619,6 @@ function SettingsPage() {
                     </label>
                     <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px', marginBottom: '16px' }}>Minimum AI certainty required before triggering a hazard alert.</div>
                     <input type="range" name="confidenceThreshold" min="10" max="95" step="5" value={formData.confidenceThreshold} onChange={handleInputChange} className="custom-range" />
-                  </div>
-
-                  <div style={{ marginTop: '30px' }}>
-                    <label className="input-label">Camera Stream Resolution</label>
-                    <div className="input-group">
-                      <Monitor size={18} className="input-icon" />
-                      <CustomDropdown 
-                        icon={Monitor}
-                        name="streamResolution"
-                        value={formData.streamResolution}
-                        onChange={handleInputChange}
-                        options={[
-                          { value: '480p', label: '480p (Battery Saver)' },
-                          { value: '720p', label: '720p (Balanced)' },
-                          { value: '1080p', label: '1080p (High Quality)' }
-                        ]}
-                      />
-                    </div>
                   </div>
                 </div>
               )}
@@ -669,17 +635,6 @@ function SettingsPage() {
                     </div>
                     <label className="switch">
                       <input type="checkbox" name="notifications" checked={formData.notifications} onChange={handleInputChange} />
-                      <span className="slider"></span>
-                    </label>
-                  </div>
-
-                  <div className="toggle-container">
-                    <div>
-                      <div style={{ fontSize: '15px', fontWeight: '800', color: '#fff', display: 'flex', alignItems: 'center', gap: '10px' }}><Volume2 size={16} color="#f59e0b"/> Audio Alerts</div>
-                      <div style={{ fontSize: '12px', color: '#64748b', marginTop: '4px' }}>Play a warning chime when a CRITICAL hazard is detected.</div>
-                    </div>
-                    <label className="switch">
-                      <input type="checkbox" name="audioAlerts" checked={formData.audioAlerts} onChange={handleInputChange} />
                       <span className="slider"></span>
                     </label>
                   </div>
@@ -702,6 +657,24 @@ function SettingsPage() {
                       />
                     </div>
                   </div>
+
+                  <div style={{ marginTop: '10px', marginBottom: '30px' }}>
+                    <label className="input-label">Navigation Distance Unit</label>
+                    <div className="input-group">
+                      <Sliders size={18} className="input-icon" />
+                      <CustomDropdown 
+                        icon={Sliders}
+                        name="distanceUnit"
+                        value={formData.distanceUnit}
+                        onChange={handleInputChange}
+                        options={[
+                          { value: 'metric', label: 'Metric (Meters / Kilometers)' },
+                          { value: 'imperial', label: 'Imperial (Feet / Miles)' }
+                        ]}
+                      />
+                    </div>
+                  </div>
+
                 </div>
               )}
 

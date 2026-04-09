@@ -20,6 +20,35 @@ function App() {
   const [loadingMessage, setLoadingMessage] = useState('');
 
   useEffect(() => {
+    let timeoutId;
+    
+    const resetTimer = () => {
+      clearTimeout(timeoutId);
+      // Fetch the user's timeout setting from localStorage or Context
+      const timeoutMinutes = parseInt(localStorage.getItem('sessionTimeout') || '30');
+      
+      if (timeoutMinutes && timeoutMinutes !== 'never') {
+        timeoutId = setTimeout(async () => {
+          alert("Session expired due to inactivity.");
+          await supabase.auth.signOut();
+          window.location.href = "/login"; // Redirect to login
+        }, timeoutMinutes * 60 * 1000); // Convert minutes to milliseconds
+      }
+    };
+  
+    // Listen for activity
+    window.addEventListener('mousemove', resetTimer);
+    window.addEventListener('keydown', resetTimer);
+    resetTimer(); // Start the timer
+  
+    return () => {
+      window.removeEventListener('mousemove', resetTimer);
+      window.removeEventListener('keydown', resetTimer);
+      clearTimeout(timeoutId);
+    };
+  }, []);
+  
+  useEffect(() => {
     // Initial Auth Check
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);

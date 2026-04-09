@@ -63,14 +63,12 @@ class ToolData(BaseModel):
     description: str = ""
 
 class SettingsUpdate(BaseModel):
-    auto_connect: bool
     notifications: bool
     confidence_threshold: int
-    stream_resolution: str
-    audio_alerts: bool
     session_timeout: str
     data_retention: str
     job_title: str
+    distance_unit: str
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -134,11 +132,13 @@ is_processing_audio = False
 
 unpaired_devices_waiting = {}
 active_user_rooms = {}
+user_settings_cache = {}
 
 training_queue = asyncio.Queue()
 
 @app.on_event("startup")
 async def startup_event():
+    asyncio.create_task(scheduled_database_cleanup())
     asyncio.create_task(background_training_worker())
 
 async def background_training_worker():
@@ -387,6 +387,13 @@ def api_get_settings(user_id: str = Depends(verify_supabase_token)):
 @app.put("/api/settings")
 def api_update_settings(settings: SettingsUpdate, user_id: str = Depends(verify_supabase_token)):
     database.update_user_settings(user_id, settings.dict())
+
+    global user_settings_cache
+    if user_id not in user_settings_cache:
+        user_settings_cache[user_id] = {}
+
+    user_settings_cache[user_id]['confidence_threshold'] = settings.confidence_threshold
+    
     return {"status": "success"}
 
 @app.get("/api/hazards")
@@ -519,13 +526,32 @@ async def dashboard_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         dashboard_connections.remove(websocket)
 
+async def scheduled_database_cleanup():
+    """Runs the database cleanup routine periodically."""
+    print("[SYSTEM] Database cleanup scheduler started. Waking up every 24 hours.")
+    while True:
+        try:
+            # 1. Run the cleanup function
+            await asyncio.to_thread(database.clean_old_hazard_logs)
+        except Exception as e:
+            print(f"[SYSTEM ERROR] Scheduled cleanup failed: {e}")
+            
+        # 2. Go to sleep for exactly 24 hours (86400 seconds)
+        await asyncio.sleep(86400)
+
 async def background_ai_worker():
     global raw_frame_buffer, latest_frame, latest_jpeg_bytes, latest_frame_seq, is_currently_safe, last_ocr_time, edge_device_ws, last_nav_push, active_mode, target_tool_name, dashboard_awake, last_guidance_time, last_guidance_text
     global is_glasses_awake, frontend_mic_active, is_processing_audio, hardware_wake_timer, accumulated_command
-    global global_user_id # Access our captured ID
+    global global_user_id, user_settings_cache
     
+    if global_user_id and global_user_id not in user_settings_cache:
+        user_settings_cache[global_user_id] = database.get_user_settings(global_user_id) or {}
+
     while True:
         try:
+            current_settings = user_settings_cache.get(global_user_id, {})
+            yolo_conf = int(current_settings.get('confidence_threshold', 75)) / 100.0
+
             if is_glasses_awake and not frontend_mic_active and not is_processing_audio:
                 if time.time() - hardware_wake_timer > 9.0: 
                     is_glasses_awake = False
@@ -538,7 +564,7 @@ async def background_ai_worker():
                 raw_frame_buffer = None 
                 clean_ocr_frame = img_to_process.copy()
 
-                processed_img, status, hazards = await asyncio.to_thread(detect_hazard.analyze_frame, img_to_process)
+                processed_img, status, hazards = await asyncio.to_thread(detect_hazard.analyze_frame, img_to_process, conf_threshold=yolo_conf)
                 latest_frame = processed_img
 
                 if active_mode in ["TOOL", "GUIDANCE"]:

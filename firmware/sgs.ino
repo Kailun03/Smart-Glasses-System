@@ -166,14 +166,21 @@ void setup() {
   
   Serial.println("\nWiFi connected successfully!");
 
-  // 1. Grab the ESP32's unique MAC Address
-  String mac_address = WiFi.macAddress();
+  // 1. Grab the ESP32's unique raw MAC Address
+  String raw_mac = WiFi.macAddress();
   
-  // 2. Append it to the WebSocket URL
-  String full_ws_url = String(ws_url) + "?mac=" + mac_address;
-  Serial.println("Connecting to Server with MAC: " + mac_address);
+  // 2. Remove all the colons (":") from the string
+  raw_mac.replace(":", "");
+  
+  // 3. Prepend your custom system prefix
+  String custom_device_id = "SGS-" + raw_mac; 
+  
+  // 4. Append the formatted ID to the WebSocket URL
+  String full_ws_url = String(ws_url) + "?mac=" + custom_device_id;
+  
+  Serial.println("Connecting to Server with Device ID: " + custom_device_id);
 
-  // 3. Connect using the new dynamic URL
+  // 5. Connect using the new dynamic URL
   webSocket.beginSSL(ws_host, ws_port, full_ws_url.c_str());
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(5000);

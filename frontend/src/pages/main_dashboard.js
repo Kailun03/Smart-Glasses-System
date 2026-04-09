@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Camera, Battery, MapPin, BrainCircuit, Wifi, ToolboxIcon, Activity, ShieldCheck, Mic, Terminal } from 'lucide-react';
-import { SYSTEM_VERSION, WS_BASE_URL } from '../config';
+import { Camera, Battery, MapPin, BrainCircuit, Wifi, ToolboxIcon, Activity, ShieldCheck, Mic, Terminal, CheckCircle, XCircle } from 'lucide-react';
+import { SYSTEM_VERSION, WS_BASE_URL, API_BASE_URL } from '../config';
+import { supabase } from '../supabaseClient';
 
 const WidgetCard = ({ title, icon: Icon, children, className = "", delay = "0s", style = {} }) => (
   <div className={`widget-card animate-slide-up ${className}`} style={{ animationDelay: delay, ...style }}>
@@ -22,6 +23,7 @@ function MainDashboard({ onNavigateVision }) {
   const [isLoading, setIsLoading] = useState(false);
   const [sysState, setSysState] = useState({ mode: "NORMAL", lat: 5.41, lon: 100.33 });
   const [locationName, setLocationName] = useState("Locating ...");
+  const [hardwareStatus, setHardwareStatus] = useState({ paired: false, device_id: null, online: false, devices_waiting: [] });
   
   // NEW: Dynamic Logs State (Starts with a single initialization message)
   const [sysLogs, setSysLogs] = useState([
@@ -36,6 +38,34 @@ function MainDashboard({ onNavigateVision }) {
     error: '#ef4444',    // Red
     system: '#a855f7'    // Purple
   };
+
+  const fetchHardwareStatus = async (token, isBackground = false) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/hardware/status`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (!response.ok) {
+        console.error("Hardware API rejected request:", await response.text());
+        return; 
+      }
+      
+      const data = await response.json();
+      setHardwareStatus(data);
+    } catch (error) {
+      console.error("Failed to fetch hardware status:", error);
+    } 
+  };
+
+  useEffect(() => {
+    const initHardware = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        fetchHardwareStatus(session.access_token);
+      }
+    };
+    initHardware();
+  }, []);
 
   // Helper function to push new logs to the terminal
   const appendLog = (text, type = "info") => {
@@ -301,12 +331,77 @@ function MainDashboard({ onNavigateVision }) {
             </button>
           </div>
 
-          <div className="showcase-center">
-            <div className="model-aura"></div>
+          <div className="showcase-center" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', position: 'relative' }}>
+            
+            {/* Background Glow (Aura) */}
+            <div className="model-aura" style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: '80%',
+              height: '80%',
+              background: isDeviceConnected 
+                ? 'radial-gradient(circle, rgba(0,229,255,0.15) 0%, rgba(0,0,0,0) 70%)' 
+                : 'radial-gradient(circle, rgba(239,68,68,0.1) 0%, rgba(0,0,0,0) 70%)',
+              zIndex: 0,
+              pointerEvents: 'none',
+              transition: 'background 0.5s ease'
+            }}></div>
+
+<div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '8px 20px',
+              background: isDeviceConnected ? 'rgba(0, 229, 255, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+              border: `1px solid ${isDeviceConnected ? 'rgba(0, 229, 255, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+              borderRadius: '30px',
+              backdropFilter: 'blur(12px)',
+              marginTop: '80px',
+              position: 'relative',
+              zIndex: 10,
+              boxShadow: isDeviceConnected ? '0 0 20px rgba(0, 229, 255, 0.15)' : 'none',
+              transition: 'all 0.3s ease'
+            }}>
+              {isDeviceConnected ? (
+                <CheckCircle size={14} color="#00E5FF" />
+              ) : (
+                <XCircle size={14} color="#ef4444" />
+              )}
+              <span style={{
+                fontSize: '12px',
+                fontWeight: '800',
+                letterSpacing: '1.5px',
+                color: isDeviceConnected ? '#00E5FF' : '#ef4444',
+                textTransform: 'uppercase'
+              }}>
+                {isDeviceConnected && hardwareStatus?.device_id 
+                  ? `LINKED: ${hardwareStatus.device_id}` 
+                  : "NO DEVICE CONNECTED"}
+              </span>
+            </div>
+
+            {/* 3D Model */}
             <model-viewer
-              src="/smart_glasses.glb" auto-rotate='true' rotation-per-second="15deg"
-              camera-controls="false" disable-zoom environment-image="neutral" exposure="1.2" shadow-intensity="1.5" interaction-prompt="none"
-              style={{ width: '100%', height: '380px', minHeight: '300px', outline: 'none', filter: isDeviceConnected ? 'none' : 'grayscale(1) brightness(0.7)' }}
+              src="/smart_glasses.glb" 
+              auto-rotate='true' 
+              rotation-per-second="15deg"
+              camera-controls="false" 
+              disable-zoom 
+              environment-image="neutral" 
+              exposure="1.2" 
+              shadow-intensity="1.5" 
+              interaction-prompt="none"
+              style={{ 
+                width: '100%', 
+                height: '320px', 
+                minHeight: '300px', 
+                outline: 'none', 
+                filter: isDeviceConnected ? 'drop-shadow(0px 10px 20px rgba(0,229,255,0.2))' : 'grayscale(1) brightness(0.7)',
+                zIndex: 1,
+                transition: 'all 0.5s ease'
+              }}
             ></model-viewer>
           </div>
 

@@ -41,7 +41,7 @@ def draw_modern_hud_box(img, x1, y1, x2, y2, color, label):
     text_color = (0, 0, 0) if sum(color) > 400 else (255, 255, 255)
     cv2.putText(img, label, (x1 + 8, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, text_color, 1, cv2.LINE_AA)
 
-def analyze_frame(img: np.ndarray):
+def analyze_frame(img: np.ndarray, conf_threshold=0.75):
     global frame_counter, last_drawn_boxes
     frame_counter += 1
 
@@ -58,7 +58,7 @@ def analyze_frame(img: np.ndarray):
     LEFT_ZONE_MAX = img_width * 0.33
     RIGHT_ZONE_MIN = img_width * 0.66
         
-    results = model(img, stream=True, verbose=False, conf=0.45)
+    results = model(img, stream=True, verbose=False, conf=conf_threshold)
     critical_hazards = []
     
     new_drawn_boxes = []

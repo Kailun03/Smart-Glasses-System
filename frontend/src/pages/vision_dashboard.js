@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Activity, Terminal, Trash2, Server, Cpu, Glasses, LogOut, Battery, Navigation, Command, Volume2, VolumeX, Mic, MicOff } from 'lucide-react';
-import { WS_BASE_URL } from '../config';
+import { WS_BASE_URL, API_BASE_URL } from '../config';
 import { supabase } from '../supabaseClient';
 
 const SYSTEM_MODES = {
@@ -19,6 +19,7 @@ function VisionDashboard({ onNavigate }) {
   const logsEndRef = useRef(null);
   const transientModeResetRef = useRef(null);
   const lastOneShotRef = useRef({ kind: null, at: 0 });
+  const [hardwareStatus, setHardwareStatus] = useState({ paired: false, device_id: null, online: false, devices_waiting: [] });
 
   const [backendConnected, setBackendConnected] = useState(false);
   const [deviceConnected, setDeviceConnected] = useState(false);
@@ -175,6 +176,34 @@ function VisionDashboard({ onNavigate }) {
       if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current); // Cleanup timer
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const fetchHardwareStatus = async (token, isBackground = false) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/hardware/status`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (!response.ok) {
+        console.error("Hardware API rejected request:", await response.text());
+        return; 
+      }
+      
+      const data = await response.json();
+      setHardwareStatus(data);
+    } catch (error) {
+      console.error("Failed to fetch hardware status:", error);
+    } 
+  };
+
+  useEffect(() => {
+    const initHardware = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        fetchHardwareStatus(session.access_token);
+      }
+    };
+    initHardware();
   }, []);
 
   const toggleListening = () => {
@@ -636,7 +665,9 @@ function VisionDashboard({ onNavigate }) {
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <Glasses size={14} color="#f8fafc" />
-                  <span style={{ fontSize: '11px', fontWeight: '500', color: '#f8fafc' }}>SGS-MLY000001-A</span>
+                  <span style={{ fontSize: '11px', fontWeight: '500', color: '#f8fafc', textTransform: 'uppercase' }}>
+                    {hardwareStatus.device_id ? `${hardwareStatus.device_id}` : "UNKNOWN DEVICE"}
+                  </span>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>

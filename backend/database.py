@@ -101,14 +101,12 @@ def get_user_settings(user_id: str):
         # Create default settings if new user (NOW WITH ALL FIELDS)
         default_data = {
             "user_id": user_id, 
-            "auto_connect": True, 
             "notifications": True,
             "confidence_threshold": 75,
-            "stream_resolution": "720p",
-            "audio_alerts": True,
             "session_timeout": "30",
             "data_retention": "90",
-            "job_title": "Safety Inspector"
+            "job_title": "Unspecified Role",
+            "distance_unit": "metric"
         }
         ins = supabase.table("user_settings").insert(default_data).execute()
         return ins.data[0]
@@ -118,14 +116,12 @@ def update_user_settings(user_id: str, settings_data: dict):
     try:
         payload = {
             "user_id": user_id,
-            "auto_connect": settings_data.get("auto_connect", True),
             "notifications": settings_data.get("notifications", True),
             "confidence_threshold": settings_data.get("confidence_threshold", 75),
-            "stream_resolution": settings_data.get("stream_resolution", "720p"),
-            "audio_alerts": settings_data.get("audio_alerts", True),
             "session_timeout": settings_data.get("session_timeout", "30"),
             "data_retention": settings_data.get("data_retention", "90"),
-            "job_title": settings_data.get("job_title", "Safety Inspector")
+            "job_title": settings_data.get("job_title", "Unspecified Role"),
+            "distance_unit": settings_data.get("distance_unit", "metric")
         }
         
         # ADDED on_conflict="user_id" HERE
@@ -166,3 +162,26 @@ def get_owner_by_hardware_id(mac_address: str):
     except Exception as e:
         print(f"[DB ERROR] Get Owner: {e}")
         return None
+
+def clean_old_hazard_logs():
+    """Deletes hazard logs older than the user's data_retention policy."""
+    try:
+        # 1. Get all users and their retention settings
+        users = supabase.table("user_settings").select("user_id, data_retention").execute()
+        
+        for user in users.data:
+            retention_days = user.get("data_retention", "90")
+            if retention_days == "forever":
+                continue
+                
+            days = int(retention_days)
+            # Calculate the cutoff date (Requires python datetime module)
+            from datetime import datetime, timedelta
+            cutoff_date = (datetime.utcnow() - timedelta(days=days)).isoformat()
+
+            # 2. Delete logs older than cutoff date for this specific user
+            supabase.table("hazard_logs").delete().eq("user_id", user["user_id"]).lt("timestamp", cutoff_date).execute()
+            
+        print("[DATABASE] Old hazard logs successfully cleaned up.")
+    except Exception as e:
+        print(f"[DB ERROR] Failed to clean old logs: {e}")
