@@ -2,8 +2,8 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-print("[HAZARD DETECTION] Loading Edge-Optimized YOLO Hazard Model...")
-model = YOLO("yolov8n.pt") 
+print("[HAZARD DETECTION] Loading Custom Hazard Model...")
+model = YOLO("custom_hazard.pt") 
 print("[HAZARD DETECTION] Hazard Model Loaded!")
 
 frame_counter = 0
@@ -68,7 +68,7 @@ def analyze_frame(img: np.ndarray):
             class_id = int(box.cls[0])
             object_name = model.names[class_id]
             
-            if object_name in ['car', 'person', 'truck', 'bus', 'motorcycle', 'bicycle']:
+            if object_name in ['barrier', 'bicycle', 'bollard', 'motorcycle', 'obstacle', '	opened-door', 'person', 'platform-edge', 'pole', 'pothole', 'road-edge', 'stair', '	traffic-cone', 'vehicle']:
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
                 
                 box_area = (x2 - x1) * (y2 - y1)
