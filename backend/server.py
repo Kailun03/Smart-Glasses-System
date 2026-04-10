@@ -9,7 +9,6 @@ import numpy as np
 import json
 import time
 from typing import Any, Dict, Optional
-import pyttsx3
 import os
 import edge_tts
 from pydub import AudioSegment
@@ -71,9 +70,6 @@ class SettingsUpdate(BaseModel):
     distance_unit: str
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-tts_engine = pyttsx3.init()
-tts_engine.setProperty('rate', 160)
 
 last_ocr_time = 0
 latest_frame = None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import math
+import threading
 from typing import Any, Dict, List, Tuple
 import cv2
 import numpy as np
@@ -8,46 +9,57 @@ import mediapipe as mp
 
 try:
     from ultralytics import YOLO
-except Exception:  
+except Exception:
     YOLO = None
 
 # --- DUAL-MODEL ARCHITECTURE ---
-BASE_WEIGHTS = "yolov8n.pt"  # Brain 1: Knows 80 general items (laptop, cup, etc.)
-CUSTOM_WEIGHTS = os.getenv("TOOLS_MODEL_PATH", "custom_tools_v1.pt") # Brain 2: Knows custom tools
+BASE_WEIGHTS = "yolov8n.pt"
+# Mutable path: auto_trainer assigns DEFAULT_WEIGHTS after training.
+DEFAULT_WEIGHTS = os.getenv("TOOLS_MODEL_PATH", "custom_tools_v1.pt")
 
-print("[TOOL RECOGNITION] Initializing Dual-Model Tool Recognition Module...")
+_load_lock = threading.Lock()
 _base_model = None
 _custom_model = None
+hands_tracker = None
 
-if YOLO is not None:
-    # 1. Load the General Knowledge Model
-    try:
-        _base_model = YOLO(BASE_WEIGHTS)
-        print(f"[TOOL RECOGNITION] Base COCO model loaded: {BASE_WEIGHTS}")
-    except Exception as e:  
-        print(f"[TOOL RECOGNITION] WARNING: Failed to load base model: {e}")
-
-    # 2. Load the Custom Specialist Model (if the user has trained one)
-    try:
-        if os.path.exists(CUSTOM_WEIGHTS):
-            _custom_model = YOLO(CUSTOM_WEIGHTS)
-            print(f"[TOOL RECOGNITION] Custom model loaded: {CUSTOM_WEIGHTS}")
-        else:
-            print(f"[TOOL RECOGNITION] No custom model found yet. Using Base AI only.")
-    except Exception as e:
-        print(f"[TOOL RECOGNITION] WARNING: Failed to load custom model: {e}")
-
-
-# Initialize MediaPipe Hand Tracking
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 
-hands_tracker = mp_hands.Hands(
-    static_image_mode=False,
-    max_num_hands=1, 
-    min_detection_confidence=0.5,
-    min_tracking_confidence=0.5
-)
+
+def _ensure_yolo_models() -> None:
+    global _base_model, _custom_model
+    if YOLO is None:
+        return
+    with _load_lock:
+        if _base_model is None:
+            try:
+                _base_model = YOLO(BASE_WEIGHTS)
+                print(f"[TOOL RECOGNITION] Base COCO model loaded: {BASE_WEIGHTS}")
+            except Exception as e:
+                print(f"[TOOL RECOGNITION] WARNING: Failed to load base model: {e}")
+        if _custom_model is None:
+            if os.path.exists(DEFAULT_WEIGHTS):
+                try:
+                    _custom_model = YOLO(DEFAULT_WEIGHTS)
+                    print(f"[TOOL RECOGNITION] Custom model loaded: {DEFAULT_WEIGHTS}")
+                except Exception as e:
+                    print(f"[TOOL RECOGNITION] WARNING: Failed to load custom model: {e}")
+            else:
+                print("[TOOL RECOGNITION] No custom model found yet. Using Base AI only.")
+
+
+def _ensure_hands():
+    global hands_tracker
+    with _load_lock:
+        if hands_tracker is None:
+            hands_tracker = mp_hands.Hands(
+                static_image_mode=False,
+                max_num_hands=1,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            print("[TOOL RECOGNITION] MediaPipe hands tracker initialized.")
+    return hands_tracker
 
 def draw_modern_hud_box(img, x1, y1, x2, y2, color, label):
     """Draws a sleek, modern camera-style HUD bounding box."""
@@ -93,6 +105,8 @@ def analyze_tools(
 ) -> Tuple[np.ndarray, List[Dict[str, Any]], str]:
     if img is None:
         return img, [], ""
+
+    _ensure_yolo_models()
 
     detected: List[Dict[str, Any]] = []
     base_boxes = []
@@ -169,7 +183,7 @@ def analyze_tools(
         return annotated_img, detected, f"{target_tool} not in view. Scan the area."
 
     rgb_img = cv2.cvtColor(annotated_img, cv2.COLOR_BGR2RGB)
-    hand_results = hands_tracker.process(rgb_img)
+    hand_results = _ensure_hands().process(rgb_img)
 
     if not hand_results.multi_hand_landmarks:
         return annotated_img, detected, "Tool found. Show your hand to begin guidance."
@@ -215,13 +229,14 @@ def analyze_tools(
 def reload_model():
     """Forces the system to drop the old CUSTOM model from RAM and load the newly trained one."""
     global _custom_model
-    print(f"[TOOL RECOGNITION] Hot-reloading custom model from {CUSTOM_WEIGHTS}...")
-    if YOLO is not None and os.path.exists(CUSTOM_WEIGHTS):
-        try:
-            _custom_model = YOLO(CUSTOM_WEIGHTS)
-            print("[TOOL RECOGNITION] SUCCESS: New tool model hot-swapped into memory!")
-            return True
-        except Exception as e:
-            print(f"[TOOL RECOGNITION ERROR] Failed to hot-reload model: {e}")
-            return False
+    print(f"[TOOL RECOGNITION] Hot-reloading custom model from {DEFAULT_WEIGHTS}...")
+    if YOLO is not None and os.path.exists(DEFAULT_WEIGHTS):
+        with _load_lock:
+            try:
+                _custom_model = YOLO(DEFAULT_WEIGHTS)
+                print("[TOOL RECOGNITION] SUCCESS: New tool model hot-swapped into memory!")
+                return True
+            except Exception as e:
+                print(f"[TOOL RECOGNITION ERROR] Failed to hot-reload model: {e}")
+                return False
     return False

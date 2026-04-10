@@ -1,10 +1,20 @@
+import threading
 import cv2
 import numpy as np
 from ultralytics import YOLO
 
-print("[HAZARD DETECTION] Loading Custom Hazard Model...")
-model = YOLO("custom_hazard.pt") 
-print("[HAZARD DETECTION] Hazard Model Loaded!")
+_model = None
+_model_lock = threading.Lock()
+
+
+def _get_hazard_model():
+    global _model
+    with _model_lock:
+        if _model is None:
+            print("[HAZARD DETECTION] Loading Custom Hazard Model...")
+            _model = YOLO("custom_hazard.pt")
+            print("[HAZARD DETECTION] Hazard Model Loaded!")
+    return _model
 
 frame_counter = 0
 PROCESS_EVERY_N_FRAMES = 3
@@ -58,6 +68,7 @@ def analyze_frame(img: np.ndarray, conf_threshold=0.75):
     LEFT_ZONE_MAX = img_width * 0.33
     RIGHT_ZONE_MIN = img_width * 0.66
         
+    model = _get_hazard_model()
     results = model(img, stream=True, verbose=False, conf=conf_threshold)
     critical_hazards = []
     

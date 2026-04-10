@@ -1,10 +1,20 @@
+import threading
 import easyocr
 import cv2
 import numpy as np
 
-print("[OCR] Loading OCR Engine...")
-reader = easyocr.Reader(['en'], gpu=False) 
-print("[OCR] OCR Engine Loaded!")
+_reader = None
+_reader_lock = threading.Lock()
+
+
+def _get_reader():
+    global _reader
+    with _reader_lock:
+        if _reader is None:
+            print("[OCR] Loading OCR Engine...")
+            _reader = easyocr.Reader(["en"], gpu=False)
+            print("[OCR] OCR Engine Loaded!")
+    return _reader
 
 SAFETY_KEYWORDS = ["danger", "warning", "stop", "caution", "restricted", "hazard"]
 
@@ -44,7 +54,7 @@ def analyze_text(img: np.ndarray):
         return img, "", []
 
     processed = _preprocess(img)
-    results = reader.readtext(processed)
+    results = _get_reader().readtext(processed)
     
     annotated_img = img.copy()
     full_text_list = []
@@ -85,7 +95,7 @@ def scan_safety_keywords(img: np.ndarray):
     allowlist = "".join(sorted(set(allowed_chars)))
     
     # Changed detail=0 to detail=1 so EasyOCR returns bounding boxes!
-    results = reader.readtext(processed, allowlist=allowlist, detail=1)
+    results = _get_reader().readtext(processed, allowlist=allowlist, detail=1)
     
     annotated_img = img.copy()
     detected_keywords = []

@@ -12,5 +12,4 @@ SpeechRecognition
 mediapipe
 pydub
 edge-tts
-pyttsx3
 PyYAML
