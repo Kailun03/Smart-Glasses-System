@@ -41,11 +41,8 @@ def _ensure_yolo_models() -> None:
             if os.path.exists(DEFAULT_WEIGHTS):
                 try:
                     _custom_model = YOLO(DEFAULT_WEIGHTS)
-                    print(f"[TOOL RECOGNITION] Custom model loaded: {DEFAULT_WEIGHTS}")
                 except Exception as e:
                     print(f"[TOOL RECOGNITION] WARNING: Failed to load custom model: {e}")
-            else:
-                print("[TOOL RECOGNITION] No custom model found yet. Using Base AI only.")
 
 
 def _ensure_hands():

@@ -523,7 +523,7 @@ async def dashboard_endpoint(websocket: WebSocket):
                 }))
                 continue
             if payload.get("type") == "command":
-                await _handle_dashboard_command(payload, websocket)
+                await _handle_dashboard_command(websocket, payload)
     except WebSocketDisconnect:
         dashboard_connections.remove(websocket)
 
