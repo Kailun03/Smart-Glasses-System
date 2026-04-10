@@ -32,7 +32,7 @@ export default function LoginScreen({ onSessionComplete }) {
   // NEW: Made this function async to fetch data before animating
   const triggerCinematicExit = async (session) => {
     // 1. Fetch profile data from the database
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('profiles')
       .select('display_name, avatar_url')
       .eq('id', session.user.id)
@@ -300,6 +300,7 @@ export default function LoginScreen({ onSessionComplete }) {
               </div>
 
               {errorMsg && <p style={{ color: '#ff6b6b', fontSize: '13px', textAlign: 'center', fontWeight: '500', margin: 0 }}>{errorMsg}</p>}
+              {successMsg && <p style={{ color: '#34d399', fontSize: '13px', textAlign: 'center', fontWeight: '500', margin: 0 }}>{successMsg}</p>}
 
               <button type="submit" disabled={isLoading} style={{ 
                 width: '100%', padding: isLandscape ? '16px' : '14px', backgroundColor: '#00E5FF', color: '#070b14', border: 'none', borderRadius: '30px', 

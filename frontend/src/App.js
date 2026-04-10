@@ -11,7 +11,7 @@ import LoginScreen from './pages/login_screen';
 import Sidebar from './components/Sidebar';
 
 function App() {
-  const [session, setSession] = useState(null);
+  const [, setSession] = useState(null);
   
   // Cleaned up UI State Machine: 'checking' -> 'login' -> 'dashboard'
   const [appPhase, setAppPhase] = useState('checking'); 

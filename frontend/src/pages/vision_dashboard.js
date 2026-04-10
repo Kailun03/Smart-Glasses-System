@@ -394,6 +394,8 @@ function VisionDashboard({ onNavigate }) {
         }
       } catch (e) {}
     };
+    // Handlers use goToSleep/resetSleepTimer; re-running this effect would churn the socket.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const sendCommand = async (payload) => {
