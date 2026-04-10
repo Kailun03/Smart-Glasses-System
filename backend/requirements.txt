@@ -7,3 +7,10 @@ easyocr
 supabase
 PyJWT
 python-dotenv
+python-multipart
+SpeechRecognition
+mediapipe
+pydub
+edge-tts
+pyttsx3
+PyYAML

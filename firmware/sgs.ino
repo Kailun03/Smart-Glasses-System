@@ -7,7 +7,7 @@
 // ==========================================
 // WebSocket Configuration
 // ==========================================
-const char* ws_host = "beijing-tiles-binding-street.trycloudflare.com";
+const char* ws_host = "imposed-forgot-clark-classical.trycloudflare.com";
 const int ws_port = 443; 
 const char* ws_url = "/ws";
 
@@ -41,6 +41,64 @@ WebSocketsClient webSocket;
 #define I2S_DOUT    42
 #define I2S_MIC_SD  1
 
+// ==========================================
+// MOTOR & RGB LED PIN DEFINITIONS
+// ==========================================
+#define MOTOR_PIN 2
+#define LED_R_PIN 38
+#define LED_G_PIN 39
+#define LED_B_PIN 43
+
+// ==========================================
+// BATTERY PIN DEFINITION
+// ==========================================
+#define BATTERY_PIN 3
+
+// ==========================================
+// GLOBAL STATE VARIABLES (Must be above webSocketEvent)
+// ==========================================
+unsigned long motor_end_time = 0;
+bool motor_active = false;
+
+// LED Blinking States
+bool is_waiting_for_pair = false;
+unsigned long last_blink_time = 0;
+bool led_blink_state = false;
+
+// ==========================================
+// HELPER FUNCTIONS (Must be above webSocketEvent)
+// ==========================================
+// Helper function to set RGB Colors (0-255)
+void setLEDColor(int r, int g, int b) {
+  if (is_waiting_for_pair && (r != 0 || g != 0 || b != 0)) return; // Don't override blinking
+  analogWrite(LED_R_PIN, r);
+  analogWrite(LED_G_PIN, g);
+  analogWrite(LED_B_PIN, b);
+}
+
+int getBatteryPercentage() {
+  // Read the raw ADC value (0 - 4095 for 12-bit ADC)
+  int rawValue = analogRead(BATTERY_PIN);
+  
+  // Convert to voltage (assuming 3.3V reference)
+  float pinVoltage = (rawValue / 4095.0) * 3.3;
+  
+  // Multiply by 2 because we split the voltage in half with our resistors
+  float batteryVoltage = pinVoltage * 2.0; 
+  
+  // Map LiPo voltage (3.3V empty - 4.2V full) to 0-100%
+  int percentage = (batteryVoltage - 3.3) / (4.2 - 3.3) * 100;
+  
+  // Clamp values so it doesn't say 105% or -10%
+  if (percentage > 100) percentage = 100;
+  if (percentage < 0) percentage = 0;
+
+  return percentage;
+}
+
+// ==========================================
+// WEBSOCKET EVENT
+// ==========================================
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
     case WStype_DISCONNECTED:
@@ -53,13 +111,44 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       String msg = (char*)payload;
       Serial.printf("Received Text: %s\n", msg.c_str());
       
-      // If user unpairs from dashboard, erase WiFi and reboot
+      // 1. Unpair & Factory Reset
       if (msg == "COMMAND: RESET_WIFI") {
-        Serial.println("Reset command received! Erasing WiFi credentials...");
+        Serial.println("Erasing WiFi credentials...");
+        setLEDColor(255, 0, 0); // Red for reset
         WiFiManager wm;
-        wm.resetSettings(); // Wipes the saved password from flash memory
+        wm.resetSettings(); 
         delay(1000);
-        ESP.restart();      // Reboots the ESP32 to trigger Phase 1 (Captive Portal)
+        ESP.restart();      
+      }
+      
+      // 2. Trigger Haptic Motor
+      else if (msg.indexOf("ALERT: MOTOR") >= 0) {
+        digitalWrite(MOTOR_PIN, HIGH);
+        motor_active = true;
+        motor_end_time = millis() + 600; // Vibrate for 600 milliseconds
+      }
+      
+      // 3. Pairing Status LED
+      else if (msg == "STATUS: WAITING_FOR_PAIR") {
+        is_waiting_for_pair = true; 
+      }
+      else if (msg == "STATUS: PAIRED") {
+        is_waiting_for_pair = false;
+        setLEDColor(0, 255, 0); // Solid Green when successfully paired
+      }
+      
+      // 4. Mode Indicator LEDs
+      else if (msg == "MODE: NORMAL") {
+        setLEDColor(0, 0, 0); // LED off or dim to save battery
+      }
+      else if (msg == "MODE: NAVIGATION") {
+        setLEDColor(0, 255, 0); // Green for Navigation
+      }
+      else if (msg == "MODE: OCR") {
+        setLEDColor(255, 100, 0); // Orange for OCR
+      }
+      else if (msg == "MODE: TOOL" || msg == "MODE: GUIDANCE") {
+        setLEDColor(0, 100, 255); // Light Blue for AI Tool Search
       }
       break;
     }
@@ -104,6 +193,19 @@ void setup() {
   Serial.setDebugOutput(false);
   Serial.println("\n--- OUTDOOR EDGE DEVICE START ---");
 
+  // Initialize Motor and RGB LED
+  pinMode(MOTOR_PIN, OUTPUT);
+  digitalWrite(MOTOR_PIN, LOW); // Ensure motor is off
+  
+  pinMode(LED_R_PIN, OUTPUT);
+  pinMode(LED_G_PIN, OUTPUT);
+  pinMode(LED_B_PIN, OUTPUT);
+  
+  // Turn LED White to indicate booting up
+  analogWrite(LED_R_PIN, 50);
+  analogWrite(LED_G_PIN, 50);
+  analogWrite(LED_B_PIN, 50);
+
   // Initialize Speaker
   initAudio();
 
@@ -142,7 +244,7 @@ void setup() {
     Serial.printf("Camera init failed! 0x%x\n", err);
     return;
   }
-  
+
   sensor_t *s = esp_camera_sensor_get();
   if (s != NULL) {
       s->set_vflip(s, 1);
@@ -201,6 +303,40 @@ void loop() {
   webSocket.loop();
   unsigned long current_time = millis();
   
+  // --- NON-BLOCKING MOTOR SHUTOFF ---
+  if (motor_active && current_time > motor_end_time) {
+    digitalWrite(MOTOR_PIN, LOW);
+    motor_active = false;
+  }
+
+  static unsigned long last_battery_send = 0;
+  if (current_time - last_battery_send > 10000) { // Every 10 seconds
+    int batt_pct = getBatteryPercentage();
+    int rssi = WiFi.RSSI();
+
+    String telemetryMsg = "{\"type\": \"telemetry\", \"battery\": " + String(batt_pct) + ", \"signal\": " + String(rssi) + "}";
+    webSocket.sendTXT(telemetryMsg);
+    
+    last_battery_send = current_time;
+  }
+
+  // --- NON-BLOCKING LED BLINK (Waiting for Pair) ---
+  if (is_waiting_for_pair) {
+    if (current_time - last_blink_time > 500) { // Blink every 500ms
+      led_blink_state = !led_blink_state;
+      if (led_blink_state) {
+        analogWrite(LED_R_PIN, 150); // Yellow
+        analogWrite(LED_G_PIN, 100);
+        analogWrite(LED_B_PIN, 0);
+      } else {
+        analogWrite(LED_R_PIN, 0);
+        analogWrite(LED_G_PIN, 0);
+        analogWrite(LED_B_PIN, 0);
+      }
+      last_blink_time = current_time;
+    }
+  }
+
   // Audio Capture & Uplink
   int16_t mic_samples[256];
   size_t bytes_read = 0;

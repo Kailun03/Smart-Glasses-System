@@ -1,11 +1,17 @@
-const isDevelopment = window.location.hostname === 'localhost';
+const isDevelopment =
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1';
 
-export const API_BASE_URL = isDevelopment 
-    ? "http://localhost:8000" 
-    : "https://your-backend-name.onrender.com"; // To be added when deployed
+const defaultApiBaseUrl = isDevelopment
+    ? 'http://localhost:8000'
+    : 'https://your-backend-name.onrender.com';
 
-export const WS_BASE_URL = isDevelopment
-    ? "ws://localhost:8000"
-    : "wss://your-backend-name.onrender.com"; // To be added when deployed
+export const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || defaultApiBaseUrl;
+
+const derivedWsUrl = API_BASE_URL
+    .replace(/^http:\/\//, 'ws://')
+    .replace(/^https:\/\//, 'wss://');
+
+export const WS_BASE_URL = process.env.REACT_APP_WS_BASE_URL || derivedWsUrl;
 
 export const SYSTEM_VERSION = 'v0.0.1-beta'

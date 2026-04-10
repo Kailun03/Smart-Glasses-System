@@ -518,11 +518,16 @@ async def dashboard_endpoint(websocket: WebSocket):
             "type": "status", "device_connected": edge_device_ws is not None, "log": "Dashboard synced with server.", "mode": active_mode, "location": {"lat": current_location[0], "lon": current_location[1]},
         }))
         while True:
-            msg = await websocket.receive_text()
-            try: data = json.loads(msg)
-            except Exception: continue
-            if data.get("type") != "command": continue
-            await _handle_dashboard_command(websocket, data)
+            data = await websocket.receive_text()
+            payload = json.loads(data)
+            if payload.get("type") == "ping":
+                await websocket.send_text(json.dumps({
+                    "type": "pong", 
+                    "ts": payload.get("ts")
+                }))
+                continue
+            if payload.get("type") == "command":
+                await _handle_dashboard_command(payload, websocket)
     except WebSocketDisconnect:
         dashboard_connections.remove(websocket)
 
@@ -731,11 +736,22 @@ async def edge_endpoint(websocket: WebSocket, mac: str = Query(None)):
             elif "text" in data:
                 try:
                     payload = json.loads(data["text"])
+                    
+                    # 1. Handle GPS Payload
                     if payload.get("type") == "gps":
                         global current_location
                         current_location = (payload["lat"], payload["lon"])
                         await _broadcast({
-                            "type": "status", "device_connected": True, "mode": active_mode, "location": {"lat": current_location[0], "lon": current_location[1]}
+                            "type": "status", "device_connected": True, "mode": active_mode, 
+                            "location": {"lat": current_location[0], "lon": current_location[1]}
+                        })
+                        
+                    # 2. Handle Telemetry (Battery & Signal)
+                    elif payload.get("type") == "telemetry":
+                        await _broadcast({
+                            "type": "telemetry", 
+                            "battery": payload.get("battery", 100),
+                            "signal": payload.get("signal", -50)
                         })
                 except Exception: pass
                 
@@ -843,6 +859,7 @@ async def _handle_dashboard_command(websocket: WebSocket, data: Dict[str, Any]) 
     if command in {"MODE_NORMAL", "MODE_NAVIGATION", "MODE_OCR", "MODE_TOOL"}:
         active_mode = command.replace("MODE_", "")
         if active_mode != "NAVIGATION": nav_session.stop()
+        await safe_ws_send_text(f"MODE: {active_mode}")
         await _broadcast({"type": "status", "device_connected": edge_device_ws is not None, "mode": active_mode, "log": f"Mode set to {active_mode}.", "location": {"lat": current_location[0], "lon": current_location[1]}})
         return
     if command == "SET_LOCATION":

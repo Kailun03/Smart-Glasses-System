@@ -20,6 +20,7 @@ function VisionDashboard({ onNavigate }) {
   const transientModeResetRef = useRef(null);
   const lastOneShotRef = useRef({ kind: null, at: 0 });
   const [hardwareStatus, setHardwareStatus] = useState({ paired: false, device_id: null, online: false, devices_waiting: [] });
+  const [batteryLevel, setBatteryLevel] = useState(null);
 
   const [backendConnected, setBackendConnected] = useState(false);
   const [deviceConnected, setDeviceConnected] = useState(false);
@@ -261,6 +262,7 @@ function VisionDashboard({ onNavigate }) {
           
           if (data.type === "status") {
               setDeviceConnected(data.device_connected);
+              if (!data.device_connected) setBatteryLevel(null);
 
               if (data.is_awake !== undefined) {
                 setIsAwake(data.is_awake);
@@ -345,6 +347,10 @@ function VisionDashboard({ onNavigate }) {
                 setActiveMode(SYSTEM_MODES.NORMAL);
               }, 2600);
             }
+          }
+
+          if (data.type === "telemetry" && data.battery !== undefined) {
+            setBatteryLevel(data.battery);
           }
         } catch (e) {}
       };
@@ -614,7 +620,7 @@ function VisionDashboard({ onNavigate }) {
         {deviceConnected && (
           <img 
             key={videoKey}
-            src={`http://localhost:8000/video_feed?t=${videoKey}`} 
+            src={`${API_BASE_URL}/video_feed?t=${videoKey}`}
             alt="Stream inactive" 
             style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
           />
@@ -659,8 +665,13 @@ function VisionDashboard({ onNavigate }) {
                 <div style={{ width: '1px', height: '12px', backgroundColor: 'rgba(255,255,255,0.2)' }}></div>
                 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <Battery size={14} color="#f8fafc" />
-                  <span style={{ fontSize: '11px', fontWeight: '500', color: '#f8fafc' }}>98%</span>
+                  <Battery size={14} color={batteryLevel > 20 ? "#f8fafc" : "#ef4444"} />
+                  <span style={{ fontSize: '11px', fontWeight: '500', color: deviceConnected ? (batteryLevel !== null && batteryLevel > 20 ? '#f8fafc' : '#ef4444') : '#475569' }}>
+                    {!deviceConnected 
+                      ? '---' 
+                      : (batteryLevel === null ? 'SYNCING...' : `${batteryLevel}%`)
+                    }
+                  </span>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>

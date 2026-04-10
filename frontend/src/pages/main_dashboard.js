@@ -24,7 +24,10 @@ function MainDashboard({ onNavigateVision }) {
   const [sysState, setSysState] = useState({ mode: "NORMAL", lat: 5.41, lon: 100.33 });
   const [locationName, setLocationName] = useState("Locating ...");
   const [hardwareStatus, setHardwareStatus] = useState({ paired: false, device_id: null, online: false, devices_waiting: [] });
-  
+  const [batteryLevel, setBatteryLevel] = useState(null);
+  const [wifiSignal, setWifiSignal] = useState(null);
+  const [latency, setLatency] = useState(null);
+
   // NEW: Dynamic Logs State (Starts with a single initialization message)
   const [sysLogs, setSysLogs] = useState([
     { time: new Date(), text: "System heartbeat acknowledged. Dashboard GUI operating nominally.", type: "system" }
@@ -83,24 +86,48 @@ function MainDashboard({ onNavigateVision }) {
   useEffect(() => {
     setIsLoading(true);
     const ws = new WebSocket(`${WS_BASE_URL}/ws/dashboard`);
-    
+    let pingInterval;
+
     ws.onopen = () => {
       setIsLoading(false);
       setIsHostOffline(false);
       appendLog("Secure WebSocket tunnel established with AI core.", "success");
+
+      pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+        }
+      }, 3000);
     };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         
-        // 1. Update general state
+        if (data.type === "pong") {
+          setLatency(Date.now() - data.ts);
+        }
+
+        // Update general state
         if (data.type === "status" || data.mode) {
-          if (data.device_connected !== undefined) setIsDeviceConnected(data.device_connected);
+          if (data.device_connected !== undefined) {
+            setIsDeviceConnected(data.device_connected);
+            if (!data.device_connected) {
+               setBatteryLevel(null); 
+               setWifiSignal(null);
+               setLatency(null);
+            }
+          }
           setSysState(prev => ({ ...prev, mode: data.mode || prev.mode, lat: data.location?.lat || prev.lat, lon: data.location?.lon || prev.lon }));
         }
 
-        // 2. Catch backend log broadcasts and push them to the terminal!
+        // Catch Battery Telemetry
+        if (data.type === "telemetry") {
+          if (data.battery !== undefined) setBatteryLevel(data.battery);
+          if (data.signal !== undefined) setWifiSignal(data.signal);
+        }
+
+        // Catch backend log broadcasts and push them to the terminal!
         if (data.log) {
           let logType = "info";
           const upperLog = data.log.toUpperCase();
@@ -119,10 +146,14 @@ function MainDashboard({ onNavigateVision }) {
     ws.onclose = () => {
       setIsLoading(false);
       setIsHostOffline(true);
+      if (pingInterval) clearInterval(pingInterval); // Stop pinging if closed
       appendLog("Connection to AI core lost. Retrying...", "error");
     };
 
-    return () => ws.close();
+    return () => {
+      if (pingInterval) clearInterval(pingInterval);
+      ws.close();
+    };
   }, []);
 
   useEffect(() => {
@@ -407,27 +438,55 @@ function MainDashboard({ onNavigateVision }) {
 
           <div className="showcase-right">
             <div className="telemetry-header">Smart Glasses Status</div>
+            {/* BTTERY LEVEL */}
             <div className="telemetry-pill">
-              <Battery size={20} color="#00E5FF" />
+              <Battery 
+                size={20} 
+                color={isDeviceConnected ? (batteryLevel !== null && batteryLevel > 20 ? "#00E5FF" : "#ef4444") : "#475569"} 
+              />
               <div>
                 <div style={{ fontSize: '10px', color: '#64748b', fontWeight: '900', letterSpacing: '0.5px' }}>BATTERY</div>
-                <div style={{ fontSize: '18px', fontWeight: '900', color: isDeviceConnected ? '#f8fafc' : '#475569' }}>{isDeviceConnected ? '98%' : '---'}</div>
+                <div style={{ 
+                  fontSize: '18px', 
+                  fontWeight: '900', 
+                  color: isDeviceConnected ? (batteryLevel !== null && batteryLevel > 20 ? '#f8fafc' : '#ef4444') : '#475569' 
+                }}>
+                  {!isDeviceConnected 
+                    ? '---' 
+                    : (batteryLevel === null ? 'SYNCING...' : `${batteryLevel}%`)
+                  }
+                </div>
               </div>
             </div>
+            
+            {/* LATENCY PILL */}
             <div className="telemetry-pill">
-              <Wifi size={20} color={isDeviceConnected ? '#10b981' : '#ef4444'} />
+              <Wifi size={20} color={isDeviceConnected ? (latency !== null && latency < 150 ? '#10b981' : '#f59e0b') : '#ef4444'} />
               <div>
                 <div style={{ fontSize: '10px', color: '#64748b', fontWeight: '900', letterSpacing: '0.5px' }}>LATENCY</div>
-                <div style={{ fontSize: '18px', fontWeight: '900', color: isDeviceConnected ? '#f8fafc' : '#475569' }}>{isDeviceConnected ? '14ms' : 'LOSS'}</div>
+                <div style={{ fontSize: '18px', fontWeight: '900', color: isDeviceConnected ? '#f8fafc' : '#475569' }}>
+                  {!isDeviceConnected ? 'LOSS' : (latency === null ? 'PINGING...' : `${latency}ms`)}
+                </div>
               </div>
             </div>
+
+            {/* WI-FI SIGNAL */}
             <div className="telemetry-pill">
-              <Activity size={20} color="#a855f7" />
+              <Activity size={20} color={isDeviceConnected ? (wifiSignal !== null && wifiSignal > -75 ? '#00E5FF' : '#ef4444') : '#475569'} />
               <div>
-                <div style={{ fontSize: '10px', color: '#64748b', fontWeight: '900', letterSpacing: '0.5px' }}>OS CORE</div>
-                <div style={{ fontSize: '18px', fontWeight: '900', color: isDeviceConnected ? '#f8fafc' : '#475569' }}>{isDeviceConnected ? 'STABLE' : 'OFF'}</div>
+                <div style={{ fontSize: '10px', color: '#64748b', fontWeight: '900', letterSpacing: '0.5px' }}>WI-FI SIGNAL</div>
+                <div style={{ fontSize: '18px', fontWeight: '900', color: isDeviceConnected ? '#f8fafc' : '#475569' }}>
+                  {!isDeviceConnected 
+                    ? 'OFF' 
+                    : (wifiSignal === null 
+                        ? 'SYNCING...' 
+                        : (wifiSignal > -60 ? 'STRONG' : wifiSignal > -75 ? 'FAIR' : 'WEAK')
+                      )
+                  }
+                </div>
               </div>
             </div>
+
           </div>
         </div>
 
@@ -438,7 +497,7 @@ function MainDashboard({ onNavigateVision }) {
               <span style={{ fontWeight: '800', fontSize: '12px' }}>Spatial YOLO</span>
               <div style={{ color: '#10b981', fontSize: '10px', fontWeight: '900', border: '1px solid #10b981', padding: '4px 8px', borderRadius: '6px' }}>LIVE</div>
             </div>
-            <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0, fontWeight: '500' }}>Detects vehicles, pedestrians, and obstacles. Latency: ~45ms.</p>
+            <p style={{ fontSize: '13px', color: '#94a3b8', margin: 0, fontWeight: '500' }}>Detects common classes of hazard such as vehicles, people, and obstacles.</p>
           </WidgetCard>
 
           <WidgetCard title="Industrial Support" icon={ToolboxIcon} delay="0.3s">
