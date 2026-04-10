@@ -24,15 +24,15 @@ function App() {
     
     const resetTimer = () => {
       clearTimeout(timeoutId);
-      // Fetch the user's timeout setting from localStorage or Context
       const timeoutMinutes = parseInt(localStorage.getItem('sessionTimeout') || '30');
       
       if (timeoutMinutes && timeoutMinutes !== 'never') {
         timeoutId = setTimeout(async () => {
-          alert("Session expired due to inactivity.");
-          await supabase.auth.signOut();
-          window.location.href = "/login"; // Redirect to login
-        }, timeoutMinutes * 60 * 1000); // Convert minutes to milliseconds
+          alert("Session expired due to inactivity.");         
+          await supabase.auth.signOut(); 
+          window.location.hash = ""; 
+          
+        }, timeoutMinutes * 60 * 1000);
       }
     };
   
