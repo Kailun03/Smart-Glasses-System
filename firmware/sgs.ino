@@ -7,7 +7,7 @@
 // ==========================================
 // WebSocket Configuration
 // ==========================================
-const char* ws_host = "imposed-forgot-clark-classical.trycloudflare.com";
+const char* ws_host = "aura.aura-vision.space";
 const int ws_port = 443; 
 const char* ws_url = "/ws";
 
