@@ -9,7 +9,8 @@ PyJWT
 python-dotenv
 python-multipart
 SpeechRecognition
-mediapipe
+# Legacy mp.solutions.hands removed in mediapipe 0.10.31+; pin until we migrate to Tasks API.
+mediapipe>=0.10.14,<0.10.31
 pydub
 edge-tts
 PyYAML
