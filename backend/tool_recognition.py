@@ -5,7 +5,6 @@ import threading
 from typing import Any, Dict, List, Tuple
 import cv2
 import numpy as np
-import mediapipe as mp
 
 try:
     from ultralytics import YOLO
@@ -21,9 +20,10 @@ _load_lock = threading.Lock()
 _base_model = None
 _custom_model = None
 hands_tracker = None
-
-mp_hands = mp.solutions.hands
-mp_drawing = mp.solutions.drawing_utils
+# Set only after lazy init in _ensure_hands() (mediapipe must not touch mp.solutions at import time).
+_mp_hands_mod = None
+_mp_drawing_mod = None
+_hands_init_failed = False
 
 
 def _ensure_yolo_models() -> None:
@@ -49,16 +49,34 @@ def _ensure_yolo_models() -> None:
 
 
 def _ensure_hands():
-    global hands_tracker
+    """Lazy-init MediaPipe hands. Newer mediapipe (0.10.31+) has no mp.solutions — pin to 0.10.30 or migrate to Tasks API."""
+    global hands_tracker, _mp_hands_mod, _mp_drawing_mod, _hands_init_failed
+    if _hands_init_failed:
+        return None
     with _load_lock:
-        if hands_tracker is None:
-            hands_tracker = mp_hands.Hands(
-                static_image_mode=False,
-                max_num_hands=1,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5,
-            )
-            print("[TOOL RECOGNITION] MediaPipe hands tracker initialized.")
+        if hands_tracker is None and not _hands_init_failed:
+            try:
+                import mediapipe as mp_pkg
+                if not hasattr(mp_pkg, "solutions"):
+                    print(
+                        "[TOOL RECOGNITION] MediaPipe has no 'solutions' (install mediapipe==0.10.30). "
+                        "Hand guidance disabled; server will stay up."
+                    )
+                    _hands_init_failed = True
+                    return None
+                _mp_hands_mod = mp_pkg.solutions.hands
+                _mp_drawing_mod = mp_pkg.solutions.drawing_utils
+                hands_tracker = _mp_hands_mod.Hands(
+                    static_image_mode=False,
+                    max_num_hands=1,
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.5,
+                )
+                print("[TOOL RECOGNITION] MediaPipe hands tracker initialized.")
+            except Exception as e:
+                print(f"[TOOL RECOGNITION] MediaPipe hands init failed: {e}")
+                _hands_init_failed = True
+                return None
     return hands_tracker
 
 def draw_modern_hud_box(img, x1, y1, x2, y2, color, label):
@@ -183,17 +201,30 @@ def analyze_tools(
         return annotated_img, detected, f"{target_tool} not in view. Scan the area."
 
     rgb_img = cv2.cvtColor(annotated_img, cv2.COLOR_BGR2RGB)
-    hand_results = _ensure_hands().process(rgb_img)
+    tracker = _ensure_hands()
+    if tracker is None:
+        return (
+            annotated_img,
+            detected,
+            "Tool found. Hand guidance needs MediaPipe <0.10.31 (e.g. mediapipe==0.10.30) on the server.",
+        )
+    hand_results = tracker.process(rgb_img)
 
     if not hand_results.multi_hand_landmarks:
         return annotated_img, detected, "Tool found. Show your hand to begin guidance."
 
     h, w, c = annotated_img.shape
     hand_landmarks = hand_results.multi_hand_landmarks[0]
-    
-    custom_node_spec = mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=1, circle_radius=2)
-    custom_line_spec = mp_drawing.DrawingSpec(color=(255, 230, 0), thickness=2) 
-    mp_drawing.draw_landmarks(annotated_img, hand_landmarks, mp_hands.HAND_CONNECTIONS, custom_node_spec, custom_line_spec)
+
+    custom_node_spec = _mp_drawing_mod.DrawingSpec(color=(255, 255, 255), thickness=1, circle_radius=2)
+    custom_line_spec = _mp_drawing_mod.DrawingSpec(color=(255, 230, 0), thickness=2)
+    _mp_drawing_mod.draw_landmarks(
+        annotated_img,
+        hand_landmarks,
+        _mp_hands_mod.HAND_CONNECTIONS,
+        custom_node_spec,
+        custom_line_spec,
+    )
 
     index_finger = hand_landmarks.landmark[8]
     thumb_finger = hand_landmarks.landmark[4]

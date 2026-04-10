@@ -9,8 +9,8 @@ PyJWT
 python-dotenv
 python-multipart
 SpeechRecognition
-# Legacy mp.solutions.hands removed in mediapipe 0.10.31+; pin until we migrate to Tasks API.
-mediapipe>=0.10.14,<0.10.31
+# Exact pin: 0.10.31+ removed mp.solutions. Range pins can still resolve badly with caches.
+mediapipe==0.10.30
 pydub
 edge-tts
 PyYAML
