@@ -7,7 +7,10 @@ function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnaly
 
   const NavButton = ({ id, icon: Icon, label, onClick }) => (
     <button 
-      onClick={onClick}
+      onClick={(e) => {
+        onClick(e);
+        setIsSidebarExpanded(false);
+      }}
       onMouseOver={(e) => {
         if (currentPage !== id) {
           e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.03)';
@@ -73,7 +76,10 @@ function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnaly
         
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', borderTop: '1px solid #1e293b', paddingTop: '16px' }}>
           <button 
-            onClick={onLogout}
+            onClick={(e) => {
+              onLogout(e);
+              setIsSidebarExpanded(false);
+            }}
             onMouseOver={(e) => {
                 e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.03)';
                 e.currentTarget.style.color = '#f8fafc';
