@@ -24,7 +24,7 @@ function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnaly
           e.currentTarget.style.color = '#94a3b8';
         }
       }}
-      style={{ 
+      style={{
         backgroundColor: currentPage === id ? 'rgba(56, 189, 248, 0.1)' : 'transparent', 
         color: currentPage === id ? '#38bdf8' : '#94a3b8', 
         border: `1px solid ${currentPage === id ? 'rgba(56, 189, 248, 0.2)' : 'transparent'}`, 
@@ -63,8 +63,8 @@ function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnaly
           display: 'flex', 
           justifyContent: 'center', 
           alignItems: 'center',
-          background: 'linear-gradient(135deg, rgba(91, 214, 245, 0.3), rgba(6, 26, 51, 0.2))',
-          boxShadow: '0 0 20px rgba(176, 231, 255, 0.3), inset 0 0 20px rgba(255, 255, 255, 0.05)',
+          background: 'linear-gradient(135deg, rgba(64, 108, 142, 0.8), rgba(6, 26, 51, 0.8))',
+          boxShadow: '0 0 0px rgba(176, 231, 255, 0.3), inset 0 0 6px rgba(87, 199, 246, 0.5)'
         }}>
           <img 
             src={auraLogo} 
@@ -73,7 +73,7 @@ function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnaly
               width: '34px', 
               height: '34px', 
               objectFit: 'contain',
-              filter: 'brightness(1.5) contrast(1.5) drop-shadow(0px 0px 0px rgb(0, 0, 0))' 
+              filter: 'brightness(1.4) contrast(1.2) drop-shadow(0px 5px 3px rgb(0, 0, 0))' 
             }} 
           />
         </div>
