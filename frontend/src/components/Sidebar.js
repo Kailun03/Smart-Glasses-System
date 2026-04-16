@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Shield, LayoutDashboard, Database, Settings, ShieldAlert, LogOut } from 'lucide-react';
+import { LayoutDashboard, Database, Settings, ShieldAlert, LogOut } from 'lucide-react';
 import { SYSTEM_VERSION } from '../config';
+import auraLogo from '../components/aura-logo.png';
 
 function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnalytics, onNavigateSettings, onLogout }) {
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
@@ -55,7 +56,27 @@ function Sidebar({ currentPage, onNavigateHome, onNavigateTools, onNavigateAnaly
         style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: isSidebarExpanded ? '300px' : '42px', backgroundColor: 'rgba(5, 29, 37, 0.6)', borderRight: '1px solid #1e293b', padding: '28px 8px', display: 'flex', flexDirection: 'column', gap: '32px', transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)', overflowX: 'hidden', whiteSpace: 'nowrap', zIndex: 1100 }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', paddingBottom: '16px', borderBottom: '1px solid #1e293b' }}>
-          <div style={{ backgroundColor: 'rgba(15, 89, 121, 0.5)', padding: '8px', borderRadius: '12px' }}><Shield size={24} color="#38bdf8" /></div>
+        <div style={{ 
+          position: 'relative',
+          padding: '3px', 
+          borderRadius: '10px', 
+          display: 'flex', 
+          justifyContent: 'center', 
+          alignItems: 'center',
+          background: 'linear-gradient(135deg, rgba(91, 214, 245, 0.3), rgba(6, 26, 51, 0.2))',
+          boxShadow: '0 0 20px rgba(176, 231, 255, 0.3), inset 0 0 20px rgba(255, 255, 255, 0.05)',
+        }}>
+          <img 
+            src={auraLogo} 
+            alt="AURA Logo" 
+            style={{ 
+              width: '34px', 
+              height: '34px', 
+              objectFit: 'contain',
+              filter: 'brightness(1.5) contrast(1.5) drop-shadow(0px 0px 0px rgb(0, 0, 0))' 
+            }} 
+          />
+        </div>
           <div style={{ opacity: isSidebarExpanded ? 1 : 0 }}>
             <h1 style={{ margin: 0, fontSize: '18px', color: '#f8fafc' }}>AURA Vision</h1>
             <p style={{ color: '#64748b', fontSize: '14px', marginTop: '8px' }}>Augmented User Reality Assistant</p>
