@@ -39,26 +39,30 @@ WebSocketsClient webSocket;
 #define I2S_BCLK    41
 #define I2S_LRC     40
 #define I2S_DOUT    42
-#define I2S_MIC_SD  1
+#define I2S_MIC_SD  39
 
 // ==========================================
 // MOTOR & RGB LED PIN DEFINITIONS
 // ==========================================
-#define MOTOR_PIN 2
-#define LED_R_PIN 38
-#define LED_G_PIN 39
-#define LED_B_PIN 43
+#define MOTOR_LEFT_PIN  2
+#define MOTOR_RIGHT_PIN 14
+
+#define LED_R_PIN 43  // TX Pin
+#define LED_G_PIN 44  // RX Pin
+#define LED_B_PIN 21
 
 // ==========================================
 // BATTERY PIN DEFINITION
 // ==========================================
-#define BATTERY_PIN 3
+#define BATTERY_PIN 1
 
 // ==========================================
 // GLOBAL STATE VARIABLES (Must be above webSocketEvent)
 // ==========================================
-unsigned long motor_end_time = 0;
-bool motor_active = false;
+unsigned long motor_left_end_time = 0;
+unsigned long motor_right_end_time = 0;
+bool motor_left_active = false;
+bool motor_right_active = false;
 
 // LED Blinking States
 bool is_waiting_for_pair = false;
@@ -122,15 +126,28 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       }
       
       // 2. Trigger Haptic Motor
-      else if (msg.indexOf("ALERT: MOTOR") >= 0) {
-        digitalWrite(MOTOR_PIN, HIGH);
-        motor_active = true;
-        motor_end_time = millis() + 600; // Vibrate for 600 milliseconds
+      else if (msg == "ALERT: MOTOR_LEFT") {
+        digitalWrite(MOTOR_LEFT_PIN, HIGH);
+        motor_left_active = true;
+        motor_left_end_time = millis() + 600; 
+      }
+      else if (msg == "ALERT: MOTOR_RIGHT") {
+        digitalWrite(MOTOR_RIGHT_PIN, HIGH);
+        motor_right_active = true;
+        motor_right_end_time = millis() + 600; 
+      }
+      else if (msg == "ALERT: MOTOR_BOTH") {
+        digitalWrite(MOTOR_LEFT_PIN, HIGH);
+        digitalWrite(MOTOR_RIGHT_PIN, HIGH);
+        motor_left_active = true;
+        motor_right_active = true;
+        motor_left_end_time = millis() + 600; 
+        motor_right_end_time = millis() + 600;
       }
       
       // 3. Pairing Status LED
       else if (msg == "STATUS: WAITING_FOR_PAIR") {
-        is_waiting_for_pair = true; 
+        is_waiting_for_pair = true;
       }
       else if (msg == "STATUS: PAIRED") {
         is_waiting_for_pair = false;
@@ -190,12 +207,17 @@ void initAudio() {
 
 void setup() {
   Serial.begin(115200);
+
+  delay(3000);
+
   Serial.setDebugOutput(false);
   Serial.println("\n--- OUTDOOR EDGE DEVICE START ---");
 
   // Initialize Motor and RGB LED
-  pinMode(MOTOR_PIN, OUTPUT);
-  digitalWrite(MOTOR_PIN, LOW); // Ensure motor is off
+  pinMode(MOTOR_LEFT_PIN, OUTPUT);
+  pinMode(MOTOR_RIGHT_PIN, OUTPUT);
+  digitalWrite(MOTOR_LEFT_PIN, LOW);
+  digitalWrite(MOTOR_RIGHT_PIN, LOW);
   
   pinMode(LED_R_PIN, OUTPUT);
   pinMode(LED_G_PIN, OUTPUT);
@@ -231,7 +253,7 @@ void setup() {
   config.pin_reset = RESET_GPIO_NUM;
   
   // High speed AI settings
-  config.xclk_freq_hz = 20000000;       
+  config.xclk_freq_hz = 10000000;       
   config.frame_size = FRAMESIZE_VGA;   
   config.pixel_format = PIXFORMAT_JPEG; 
   config.grab_mode = CAMERA_GRAB_LATEST;
@@ -249,6 +271,14 @@ void setup() {
   if (s != NULL) {
       s->set_vflip(s, 1);
       s->set_hmirror(s, 1);
+      s->set_gain_ctrl(s, 1);       // Enable Auto-Gain Control (AGC)
+      s->set_exposure_ctrl(s, 1);   // Enable Auto-Exposure Control (AEC)
+      s->set_awb_gain(s, 1);        // Enable Auto White Balance
+      s->set_aec2(s, 1);            // Enable Advanced AEC DSP
+      s->set_ae_level(s, 0);        // Set exposure target to normal (0)
+      s->set_bpc(s, 1);             // Enable Black Pixel Correction
+      s->set_wpc(s, 1);             // Enable White Pixel Correction
+      s->set_lenc(s, 1);            // Enable Lens Correction (Crucial for new lenses)
   }
 
   // Initialize WiFiManager
@@ -304,9 +334,13 @@ void loop() {
   unsigned long current_time = millis();
   
   // --- NON-BLOCKING MOTOR SHUTOFF ---
-  if (motor_active && current_time > motor_end_time) {
-    digitalWrite(MOTOR_PIN, LOW);
-    motor_active = false;
+  if (motor_left_active && current_time > motor_left_end_time) {
+    digitalWrite(MOTOR_LEFT_PIN, LOW);
+    motor_left_active = false;
+  }
+  if (motor_right_active && current_time > motor_right_end_time) {
+    digitalWrite(MOTOR_RIGHT_PIN, LOW);
+    motor_right_active = false;
   }
 
   static unsigned long last_battery_send = 0;

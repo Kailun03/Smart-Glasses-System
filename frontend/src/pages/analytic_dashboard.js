@@ -82,7 +82,7 @@ function AnalyticDashboard() {
       const dataArray = Array.isArray(result) ? result : (result.data || []);
       
       const processedData = dataArray.map(h => {
-        const rawType = h.hazard_type || "UNKNOWN";
+        const rawType = h.hazard_types?.name || h.hazard_type || "UNKNOWN";
         const isSign = rawType.startsWith("SIGN:");
         return {
           ...h,

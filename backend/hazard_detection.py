@@ -3,9 +3,13 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+from database import get_valid_hazard_names
+
 _model = None
 _model_lock = threading.Lock()
 
+_valid_hazards = None
+_hazards_lock = threading.Lock()
 
 def _get_hazard_model():
     global _model
@@ -15,6 +19,17 @@ def _get_hazard_model():
             _model = YOLO("custom_hazard.pt")
             print("[HAZARD DETECTION] Hazard Model Loaded!")
     return _model
+
+def _get_valid_hazards():
+    """Ensures we only ask the database for the hazard list ONCE."""
+    global _valid_hazards
+    
+    with _hazards_lock:
+        if _valid_hazards is None:
+            from database import get_valid_hazard_names
+            _valid_hazards = get_valid_hazard_names()
+            
+    return _valid_hazards
 
 frame_counter = 0
 PROCESS_EVERY_N_FRAMES = 3
@@ -74,27 +89,34 @@ def analyze_frame(img: np.ndarray, conf_threshold=0.75):
     
     new_drawn_boxes = []
 
+    valid_hazards = _get_valid_hazards()
+
     for r in results:
         for box in r.boxes:
             class_id = int(box.cls[0])
             object_name = model.names[class_id]
             
-            if object_name in ['barrier', 'bicycle', 'bollard', 'motorcycle', 'obstacle', '	opened-door', 'person', 'platform-edge', 'pole', 'pothole', 'road-edge', 'stair', '	traffic-cone', 'vehicle']:
+            # 1. Let's grab the confidence score to see if YOLO is struggling to see
+            confidence = float(box.conf[0])
+            
+            if object_name in valid_hazards:
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
                 
                 box_area = (x2 - x1) * (y2 - y1)
                 area_percentage = (box_area / total_image_area) * 100
                 
+                # 2. LOWER THE THRESHOLDS FOR TESTING!
                 if area_percentage > 35.0:
                     urgency = "CRITICAL"   
-                    box_color = (40, 40, 255) # Deep Red (BGR)
-                elif area_percentage > 15.0:
+                    box_color = (40, 40, 255) 
+                elif area_percentage > 5.0:  # Changed from 15.0 to 5.0!
                     urgency = "WARNING"    
-                    box_color = (0, 165, 255) # Bright Orange (BGR)
+                    box_color = (0, 165, 255)
                 else:
                     continue 
 
                 center_x = (x1 + x2) / 2
+
                 if center_x < LEFT_ZONE_MAX: position = "LEFT"
                 elif center_x > RIGHT_ZONE_MIN: position = "RIGHT"
                 else: position = "CENTER"

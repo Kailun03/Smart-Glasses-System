@@ -2,6 +2,8 @@ import os
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
+_hazard_type_cache = {}
+
 # Securely load the cloud credentials from the .env file
 load_dotenv()
 url: str = os.environ.get("SUPABASE_URL")
@@ -57,9 +59,50 @@ def delete_tool(tool_id: int, user_id: str):
     response = supabase.table("tools").delete().eq("id", tool_id).eq("user_id", user_id).execute()
     return True if response.data else False
 
+def get_valid_hazard_names():
+    """Fetches all known hazard names from the database to be used by the AI model."""
+    try:
+        res = supabase.table("hazard_types").select("name").execute()
+        if res.data:
+            # Extract just the string names into a simple list
+            db_hazards = [item["name"] for item in res.data]
+            print(f"[DATABASE] Successfully loaded {len(db_hazards)} hazard types from DB.")
+            return db_hazards
+        return []
+    except Exception as e:
+        print(f"[DB ERROR] Failed to fetch hazard types: {e}")
+        # Safe fallback just in case the internet drops right when the server starts!
+        return ['barrier', 'bicycle', 'bollard', 'motorcycle', 'obstacle', 'opened-door', 'person', 'platform-edge', 'pole', 'pothole', 'road-edge', 'stair', 'traffic-cone', 'vehicle']
+
+def get_hazard_id(hazard_name: str) -> int:
+    """Gets the ID for a hazard type, using a RAM cache to save database calls."""
+    if hazard_name in _hazard_type_cache:
+        return _hazard_type_cache[hazard_name]
+    
+    res = supabase.table("hazard_types").select("id").eq("name", hazard_name).execute()
+    if res.data:
+        h_id = res.data[0]["id"]
+        _hazard_type_cache[hazard_name] = h_id
+        return h_id
+
+    # insert the new detected warning sign as a new hazard     
+    ins = supabase.table("hazard_types").insert({"name": hazard_name}).execute()
+    if ins.data:
+        h_id = ins.data[0]["id"]
+        _hazard_type_cache[hazard_name] = h_id
+        return h_id
+        
+    return None
+
 def log_hazard(hazard_type: str, lat: float = None, lon: float = None, user_id: str = None):
     try:
-        data = {"hazard_type": hazard_type, "latitude": lat, "longitude": lon}
+        hazard_id = get_hazard_id(hazard_type)
+        
+        if not hazard_id:
+            print(f"[ERROR] Could not resolve hazard ID for: {hazard_type}")
+            return
+
+        data = {"hazard_id": hazard_id, "latitude": lat, "longitude": lon}
         if user_id: data["user_id"] = user_id
         supabase.table("hazard_logs").insert(data).execute()
     except Exception as e:
@@ -68,11 +111,12 @@ def log_hazard(hazard_type: str, lat: float = None, lon: float = None, user_id: 
 def get_hazard_history(user_id: str, page: int = 1, page_size: int = 100):
     try:
         start = (page - 1) * page_size
-        response = supabase.table("hazard_logs").select("*", count="exact")\
+        response = supabase.table("hazard_logs").select("*, hazard_types(name)", count="exact")\
             .eq("user_id", user_id).order("timestamp", desc=True)\
             .range(start, start + page_size - 1).execute()
         return {"data": response.data, "total_count": response.count}
-    except Exception:
+    except Exception as e:
+        print(f"[DB ERROR] Fetching history failed: {e}")
         return {"data": [], "total_count": 0}
 
 def add_notification(message: str, user_id: str, notif_type: str = "info"):
