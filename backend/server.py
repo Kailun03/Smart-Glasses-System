@@ -194,7 +194,13 @@ async def hardware_watchdog():
 def _decode_video_frame(raw_bytes: bytes) -> Optional[np.ndarray]:
     np_arr = np.frombuffer(raw_bytes, np.uint8)
     img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-    if img is not None: return cv2.flip(img, 1)
+    
+    if img is not None: 
+        img = cv2.flip(img, 1)
+        img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        
+        return img
+        
     return None
 
 def _encode_video_frame(frame: np.ndarray) -> Optional[bytes]:
