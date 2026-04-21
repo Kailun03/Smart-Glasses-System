@@ -42,14 +42,10 @@ WebSocketsClient webSocket;
 #define I2S_MIC_SD  39
 
 // ==========================================
-// MOTOR & RGB LED PIN DEFINITIONS
+// MOTOR PIN DEFINITIONS
 // ==========================================
 #define MOTOR_LEFT_PIN  2
 #define MOTOR_RIGHT_PIN 14
-
-#define LED_R_PIN 43  // TX Pin
-#define LED_G_PIN 44  // RX Pin
-#define LED_B_PIN 21
 
 // ==========================================
 // BATTERY PIN DEFINITION
@@ -57,29 +53,16 @@ WebSocketsClient webSocket;
 #define BATTERY_PIN 1
 
 // ==========================================
-// GLOBAL STATE VARIABLES (Must be above webSocketEvent)
+// GLOBAL STATE VARIABLES 
 // ==========================================
 unsigned long motor_left_end_time = 0;
 unsigned long motor_right_end_time = 0;
 bool motor_left_active = false;
 bool motor_right_active = false;
 
-// LED Blinking States
-bool is_waiting_for_pair = false;
-unsigned long last_blink_time = 0;
-bool led_blink_state = false;
-
 // ==========================================
-// HELPER FUNCTIONS (Must be above webSocketEvent)
+// HELPER FUNCTIONS 
 // ==========================================
-// Helper function to set RGB Colors (0-255)
-void setLEDColor(int r, int g, int b) {
-  if (is_waiting_for_pair && (r != 0 || g != 0 || b != 0)) return; // Don't override blinking
-  analogWrite(LED_R_PIN, r);
-  analogWrite(LED_G_PIN, g);
-  analogWrite(LED_B_PIN, b);
-}
-
 int getBatteryPercentage() {
   // Read the raw ADC value (0 - 4095 for 12-bit ADC)
   int rawValue = analogRead(BATTERY_PIN);
@@ -118,7 +101,6 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       // 1. Unpair & Factory Reset
       if (msg == "COMMAND: RESET_WIFI") {
         Serial.println("Erasing WiFi credentials...");
-        setLEDColor(255, 0, 0); // Red for reset
         WiFiManager wm;
         wm.resetSettings(); 
         delay(1000);
@@ -144,29 +126,6 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
         motor_left_end_time = millis() + 600; 
         motor_right_end_time = millis() + 600;
       }
-      
-      // 3. Pairing Status LED
-      else if (msg == "STATUS: WAITING_FOR_PAIR") {
-        is_waiting_for_pair = true;
-      }
-      else if (msg == "STATUS: PAIRED") {
-        is_waiting_for_pair = false;
-        setLEDColor(0, 255, 0); // Solid Green when successfully paired
-      }
-      
-      // 4. Mode Indicator LEDs
-      else if (msg == "MODE: NORMAL") {
-        setLEDColor(0, 0, 0); // LED off or dim to save battery
-      }
-      else if (msg == "MODE: NAVIGATION") {
-        setLEDColor(0, 255, 0); // Green for Navigation
-      }
-      else if (msg == "MODE: OCR") {
-        setLEDColor(255, 100, 0); // Orange for OCR
-      }
-      else if (msg == "MODE: TOOL" || msg == "MODE: GUIDANCE") {
-        setLEDColor(0, 100, 255); // Light Blue for AI Tool Search
-      }
       break;
     }
     case WStype_BIN:
@@ -179,7 +138,6 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 // Function to initialize the audio (both mic and speaker)
 void initAudio() {
   i2s_config_t i2s_config = {
-    // Enable both TX (Speaker) and RX (Mic)
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX), 
     .sample_rate = 22050,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
@@ -207,26 +165,16 @@ void initAudio() {
 
 void setup() {
   Serial.begin(115200);
-
   delay(3000);
 
   Serial.setDebugOutput(false);
   Serial.println("\n--- OUTDOOR EDGE DEVICE START ---");
 
-  // Initialize Motor and RGB LED
+  // Initialize Motor
   pinMode(MOTOR_LEFT_PIN, OUTPUT);
   pinMode(MOTOR_RIGHT_PIN, OUTPUT);
   digitalWrite(MOTOR_LEFT_PIN, LOW);
   digitalWrite(MOTOR_RIGHT_PIN, LOW);
-  
-  pinMode(LED_R_PIN, OUTPUT);
-  pinMode(LED_G_PIN, OUTPUT);
-  pinMode(LED_B_PIN, OUTPUT);
-  
-  // Turn LED White to indicate booting up
-  analogWrite(LED_R_PIN, 50);
-  analogWrite(LED_G_PIN, 50);
-  analogWrite(LED_B_PIN, 50);
 
   // Initialize Speaker
   initAudio();
@@ -253,12 +201,12 @@ void setup() {
   config.pin_reset = RESET_GPIO_NUM;
   
   // High speed AI settings
-  config.xclk_freq_hz = 10000000;       
+  config.xclk_freq_hz = 8000000;       
   config.frame_size = FRAMESIZE_VGA;   
   config.pixel_format = PIXFORMAT_JPEG; 
   config.grab_mode = CAMERA_GRAB_LATEST;
   config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.jpeg_quality = 10;
+  config.jpeg_quality = 12;
   config.fb_count = 2;
 
   esp_err_t err = esp_camera_init(&config);
@@ -269,8 +217,7 @@ void setup() {
 
   sensor_t *s = esp_camera_sensor_get();
   if (s != NULL) {
-      s->set_vflip(s, 1);
-      s->set_hmirror(s, 1);
+      // NOTE: Removed vflip and hmirror here. Let the Python backend handle orientation!
       s->set_gain_ctrl(s, 1);       // Enable Auto-Gain Control (AGC)
       s->set_exposure_ctrl(s, 1);   // Enable Auto-Exposure Control (AEC)
       s->set_awb_gain(s, 1);        // Enable Auto White Balance
@@ -278,41 +225,30 @@ void setup() {
       s->set_ae_level(s, 0);        // Set exposure target to normal (0)
       s->set_bpc(s, 1);             // Enable Black Pixel Correction
       s->set_wpc(s, 1);             // Enable White Pixel Correction
-      s->set_lenc(s, 1);            // Enable Lens Correction (Crucial for new lenses)
+      s->set_lenc(s, 1);            // Enable Lens Correction
   }
 
   // Initialize WiFiManager
   WiFiManager wm;
-  
-  // Set a timeout so it doesn't wait in the portal forever if power restarts
-  wm.setConfigPortalTimeout(180); // 3 minutes timeout
+  wm.setConfigPortalTimeout(180); 
   
   Serial.println("Starting WiFiManager. Connect to 'AURA_SETUP_GLASSES' on your phone if not paired.");
   
-  // This automatically connects to saved WiFi OR opens the portal "AURA_SETUP_GLASSES"
   if (!wm.autoConnect("AURA_SETUP_GLASSES")) {
     Serial.println("Failed to connect and hit timeout. Rebooting...");
     delay(3000);
-    ESP.restart(); // Restart and try again
+    ESP.restart(); 
   }
   
   Serial.println("\nWiFi connected successfully!");
 
-  // 1. Grab the ESP32's unique raw MAC Address
   String raw_mac = WiFi.macAddress();
-  
-  // 2. Remove all the colons (":") from the string
   raw_mac.replace(":", "");
-  
-  // 3. Prepend your custom system prefix
   String custom_device_id = "SGS-" + raw_mac; 
-  
-  // 4. Append the formatted ID to the WebSocket URL
   String full_ws_url = String(ws_url) + "?mac=" + custom_device_id;
   
   Serial.println("Connecting to Server with Device ID: " + custom_device_id);
 
-  // 5. Connect using the new dynamic URL
   webSocket.beginSSL(ws_host, ws_port, full_ws_url.c_str());
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(5000);
@@ -326,7 +262,6 @@ unsigned long last_transmission = 0;
 const int TARGET_FPS = 15; 
 const int FRAME_DELAY = 1000 / TARGET_FPS; 
 
-// digital volume knob
 const float MIC_GAIN = 5.0;
 
 void loop() {
@@ -344,53 +279,27 @@ void loop() {
   }
 
   static unsigned long last_battery_send = 0;
-  if (current_time - last_battery_send > 10000) { // Every 10 seconds
+  if (current_time - last_battery_send > 10000) {
     int batt_pct = getBatteryPercentage();
     int rssi = WiFi.RSSI();
-
     String telemetryMsg = "{\"type\": \"telemetry\", \"battery\": " + String(batt_pct) + ", \"signal\": " + String(rssi) + "}";
     webSocket.sendTXT(telemetryMsg);
-    
     last_battery_send = current_time;
-  }
-
-  // --- NON-BLOCKING LED BLINK (Waiting for Pair) ---
-  if (is_waiting_for_pair) {
-    if (current_time - last_blink_time > 500) { // Blink every 500ms
-      led_blink_state = !led_blink_state;
-      if (led_blink_state) {
-        analogWrite(LED_R_PIN, 150); // Yellow
-        analogWrite(LED_G_PIN, 100);
-        analogWrite(LED_B_PIN, 0);
-      } else {
-        analogWrite(LED_R_PIN, 0);
-        analogWrite(LED_G_PIN, 0);
-        analogWrite(LED_B_PIN, 0);
-      }
-      last_blink_time = current_time;
-    }
   }
 
   // Audio Capture & Uplink
   int16_t mic_samples[256];
   size_t bytes_read = 0;
-  // Non-blocking read from mic
   i2s_read(I2S_NUM_0, &mic_samples, sizeof(mic_samples), &bytes_read, 0); 
   
   if (bytes_read > 0) {
     int num_samples = bytes_read / 2;
-    // Apply Digital Amplification
     for (int i = 0; i < num_samples; i++) {
       int32_t amplified = mic_samples[i] * MIC_GAIN;
-
-      // Anti-Distortion (Clipping limits)
       if (amplified > 32767) amplified = 32767;
       if (amplified < -32768) amplified = -32768;
-
       mic_samples[i] = (int16_t)amplified;
     }
-
-    // Send amplified audio bytes to server
     webSocket.sendBIN((uint8_t*)mic_samples, bytes_read);
   }
 
