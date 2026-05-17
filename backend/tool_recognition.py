@@ -31,9 +31,14 @@ def _ensure_yolo_models() -> None:
     if YOLO is None:
         return
     with _load_lock:
+        # Create a tiny dummy image (e.g., 64x64 black square)
+        dummy_img = np.zeros((64, 64, 3), dtype=np.uint8)
+
         if _base_model is None:
             try:
                 _base_model = YOLO(BASE_WEIGHTS)
+                # Force model fusion and initialization NOW, before threads hit it
+                _base_model(dummy_img, verbose=False)
                 print(f"[TOOL RECOGNITION] Base COCO model loaded: {BASE_WEIGHTS}")
             except Exception as e:
                 print(f"[TOOL RECOGNITION] WARNING: Failed to load base model: {e}")
@@ -41,6 +46,9 @@ def _ensure_yolo_models() -> None:
             if os.path.exists(DEFAULT_WEIGHTS):
                 try:
                     _custom_model = YOLO(DEFAULT_WEIGHTS)
+                    # Force model fusion and initialization NOW
+                    _custom_model(dummy_img, verbose=False)
+                    print(f"[TOOL RECOGNITION] Custom model loaded and fused: {DEFAULT_WEIGHTS}")
                 except Exception as e:
                     print(f"[TOOL RECOGNITION] WARNING: Failed to load custom model: {e}")
 
