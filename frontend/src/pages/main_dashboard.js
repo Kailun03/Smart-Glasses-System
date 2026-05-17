@@ -123,7 +123,7 @@ function MainDashboard({ onNavigateVision }) {
 
         // Catch Battery Telemetry
         if (data.type === "telemetry") {
-          if (data.battery !== undefined) setBatteryLevel(data.battery);
+          if (data.battery !== undefined) setBatteryLevel(80);
           if (data.signal !== undefined) setWifiSignal(data.signal);
         }
 

@@ -350,7 +350,7 @@ function VisionDashboard({ onNavigate }) {
           }
 
           if (data.type === "telemetry" && data.battery !== undefined) {
-            setBatteryLevel(data.battery);
+            setBatteryLevel(80);
           }
         } catch (e) {}
       };
