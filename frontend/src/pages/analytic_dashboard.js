@@ -51,6 +51,11 @@ function AnalyticDashboard() {
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 100;
 
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportOption, setExportOption] = useState('current'); // 'current' or 'custom'
+  const [exportStartDate, setExportStartDate] = useState(new Date());
+  const [exportEndDate, setExportEndDate] = useState(new Date());
+
   // 1. Reset to page 1 whenever filters change
   useEffect(() => {
     setCurrentPage(1);
@@ -166,8 +171,84 @@ function AnalyticDashboard() {
 
   const isFiltering = filterSource !== 'ALL' || filterDate !== '';
 
+  const handleExport = () => {
+    let dataToExport = [];
+    
+    if (exportOption === 'current') {
+      dataToExport = filteredAndSortedHazards;
+    } else {
+      // Filter by custom date range
+      dataToExport = hazards.filter(h => {
+        const hDate = new Date(h.timestamp);
+        return hDate >= exportStartDate && hDate <= exportEndDate;
+      });
+    }
+  
+    const csvRows = [
+      ["Timestamp", "Source", "Type", "Severity", "Lat", "Lon"],
+      ...dataToExport.map(h => [
+        h.timestamp, h.source, h.cleanName, h.severity || 'N/A', h.latitude, h.longitude
+      ])
+    ];
+  
+    const csvString = csvRows.map(e => e.join(",")).join("\n");
+    const blob = new Blob([csvString], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `AURA_Vison_Hazard_Export_${new Date().getTime()}.csv`;
+    a.click();
+    setShowExportModal(false);
+  };
+  
   return (
     <div className="dashboard-container custom-scroll">
+      
+      {showExportModal && (
+        <div className="modal-overlay">
+          <div className="widget-card" style={{ 
+            padding: '32px', width: '480px', zIndex: 1000, 
+            background: '#0b1120', border: '1px solid var(--accent-blue)' 
+          }}>
+            <h3 style={{ margin: '0 0 32px 0', fontSize: '20px', color: '#f8fafc' }}>Export Hazard Data</h3>
+            
+            <div style={{ marginBottom: '24px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              {/* Radio Option 1 */}
+              <div className={`filter-chip ${exportOption === 'current' ? 'active-date' : ''}`} 
+                  style={{ width: '90%', padding: '16px', borderRadius: '12px', justifyContent: 'flex-start' }}
+                  onClick={() => setExportOption('current')}>
+                <input type="radio" checked={exportOption === 'current'} readOnly style={{ marginRight: '12px' }} />
+                Export Current Filtered View ({totalIncidents} events)
+              </div>
+              
+              {/* Radio Option 2 */}
+              <div className={`filter-chip ${exportOption === 'custom' ? 'active-date' : ''}`} 
+                  style={{ width: '90%', padding: '16px', borderRadius: '12px', justifyContent: 'flex-start' }}
+                  onClick={() => setExportOption('custom')}>
+                <input type="radio" checked={exportOption === 'custom'} readOnly style={{ marginRight: '12px' }} />
+                Custom Date Range
+              </div>
+            </div>
+            
+            {exportOption === 'custom' && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px', gap: '10px' }}>
+                <div style={{ flex: 1 }}><DatePicker selected={exportStartDate} onChange={setExportStartDate} customInput={<CustomDateInput isFiltered={true} />} calendarClassName="custom-dark-calendar" /></div>
+                <span style={{  flex: 1, textAlign: 'center', color: '#64748b', fontWeight: '800', fontSize: '14px' }}>TO</span>
+                <div style={{ flex: 1 }}><DatePicker selected={exportEndDate} onChange={setExportEndDate} customInput={<CustomDateInput isFiltered={true} />} calendarClassName="custom-dark-calendar" /></div>
+              </div>
+            )}
+            
+            <div style={{ display: 'flex', gap: '16px', marginTop: '10px' }}>
+              <button onClick={handleExport} className="segment-btn active" style={{ flex: 1, justifyContent: 'center', height: '48px', fontSize: '14px' }}>
+                DOWNLOAD CSV
+              </button>
+              <button onClick={() => setShowExportModal(false)} className="clear-btn" style={{ flex: 1, justifyContent: 'center', height: '48px', fontSize: '14px' }}>
+                CANCEL
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ position: 'fixed', top: '-10%', left: '-5%', width: '70vh', height: '70vh', background: 'radial-gradient(circle, rgba(0,229,255,0.12) 0%, rgba(11,17,33,0) 70%)', borderRadius: '50%', zIndex: 0, pointerEvents: 'none' }}></div>
       <div style={{ position: 'fixed', bottom: '-20%', right: '-5%', width: '60vh', height: '60vh', background: 'radial-gradient(circle, rgba(0,229,255,0.08) 0%, rgba(11,17,33,0) 70%)', borderRadius: '50%', zIndex: 0, pointerEvents: 'none' }}></div>
@@ -276,6 +357,14 @@ function AnalyticDashboard() {
         }
         .page-btn:hover:not(:disabled) { background: rgba(0, 229, 255, 0.1); border-color: var(--accent-blue); color: var(--accent-blue); box-shadow: 0 0 15px rgba(0, 229, 255, 0.2); transform: translateY(-2px); }
         .page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        .modal-overlay {
+          position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+          background: rgba(7, 11, 24, 0.8); backdrop-filter: blur(10px);
+          display: flex; align-items: center; justify-content: center;
+          z-index: 1000;
+        }
+
       `}</style>
 
       {/* HEADER */}
@@ -362,12 +451,25 @@ function AnalyticDashboard() {
                 {sortOrder === 'DESC' ? 'NEWEST FIRST' : 'OLDEST FIRST'}
               </button>
             </div>
+            
+            <div style={{ display: 'flex', gap: '16px', justifyContent: 'flex-end' }}>
+              {isFiltering && (
+                <button onClick={clearFilters} className="clear-btn">
+                  <XCircle size={16} /> CLEAR FILTERS
+                </button>
+              )}
 
-            {isFiltering && (
-              <button onClick={clearFilters} className="clear-btn">
-                <XCircle size={16} /> CLEAR FILTERS
+              <button 
+                onClick={() => setShowExportModal(true)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 12px',
+                  backgroundColor: 'rgba(168, 85, 247, 0.2)', border: '1px solid rgba(168, 85, 247, 0.5)',
+                  color: '#a855f7', borderRadius: '8px', cursor: 'pointer', fontSize: '11px', fontWeight: '800'
+                }}
+              >
+                <ArrowDownUp size={14} /> EXPORT CSV
               </button>
-            )}
+            </div>
           </div>
           
           <div className="table-container custom-scroll" style={{ paddingTop: '16px' }}>
