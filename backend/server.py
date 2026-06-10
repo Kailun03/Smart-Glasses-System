@@ -242,7 +242,7 @@ async def generate_speech_pcm(text: str) -> Optional[bytes]:
                 mp3_bytes.extend(chunk["data"])
         def decode_in_memory():
             audio = AudioSegment.from_file(io.BytesIO(mp3_bytes), format="mp3")
-            audio = audio.set_frame_rate(22050).set_channels(1).set_sample_width(2)
+            audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
             return audio.raw_data
         pcm_data = await asyncio.to_thread(decode_in_memory)
         tts_pcm_cache[cache_key] = pcm_data
@@ -702,23 +702,25 @@ async def edge_endpoint(websocket: WebSocket, mac: str = Query(None)):
                     if frontend_mic_active:
                         audio_buffer.clear()
                     else:
-                        audio_array = np.frombuffer(raw_bytes, dtype=np.int16)
-                        energy = np.abs(audio_array).mean() 
+                        # 1. Capture the raw bytes directly
+                        audio_buffer.extend(raw_bytes)
                         
-                        if energy > 200:
+                        # 2. VAD Check (Pure energy calculation)
+                        audio_array = np.frombuffer(raw_bytes, dtype=np.int16)
+                        energy = np.abs(audio_array.astype(np.float32)).mean() 
+                        
+                        VAD_THRESHOLD = 500 
+                        if energy > VAD_THRESHOLD:
                             time_since_last_speech = time.time()
-                            if is_glasses_awake:
-                                hardware_wake_timer = time.time()
                             if not is_speaking:
                                 is_speaking = True
+                                print(f"\n🗣️ [VAD] Detected! Energy: {energy:.1f}")
                                 
-                        audio_buffer.extend(raw_bytes)
+                        # 3. Detect Silence
                         process_now = False
-                        
                         if is_speaking:
                             time_silent = time.time() - time_since_last_speech
-                            silence_threshold = 0.8 if is_glasses_awake else 1.2
-                            if time_silent > silence_threshold:
+                            if time_silent > 1.2:
                                 process_now = True 
                             elif len(audio_buffer) > 250000: 
                                 process_now = True 
@@ -726,14 +728,29 @@ async def edge_endpoint(websocket: WebSocket, mac: str = Query(None)):
                             if len(audio_buffer) > 22000:
                                 audio_buffer = bytearray(audio_buffer[-22000:])
 
+                        # 4. Process and Save
                         if process_now:
-                            current_audio = bytes(audio_buffer)
+                            full_raw_bytes = bytes(audio_buffer)
                             audio_buffer.clear()
                             is_speaking = False
-                            time_since_last_speech = time.time()
                             
-                            if len(current_audio) > 15000:
-                                asyncio.create_task(process_voice_in_background(current_audio, websocket))
+                            if len(full_raw_bytes) > 15000:
+                                # SAVE DEBUG FILE BEFORE ANY PROCESSING
+                                # try:
+                                #     filename = f"debug_raw_audio_{int(time.time())}.wav"
+                                #     with wave.open(filename, 'wb') as wf:
+                                #         wf.setnchannels(1)
+                                #         wf.setsampwidth(2)
+                                #         wf.setframerate(16000) # Native rate
+                                #         wf.writeframes(full_raw_bytes)
+                                #     print(f"💾 [DEBUG] Saved raw file: {filename}")
+                                # except Exception as e:
+                                #     print(f"⚠️ [WAV ERROR] {e}")
+
+                                # Now send to processing
+                                asyncio.create_task(process_voice_in_background(full_raw_bytes, websocket))
+                            else:
+                                print(f"🗑️ [VAD] Audio too short ({len(full_raw_bytes)} bytes).")
 
             elif "text" in data:
                 try:

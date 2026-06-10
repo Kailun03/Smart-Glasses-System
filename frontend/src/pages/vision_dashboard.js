@@ -173,8 +173,16 @@ function VisionDashboard({ onNavigate }) {
     }
 
     return () => {
-      if (recognitionRef.current) recognitionRef.current.stop();
-      if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current); // Cleanup timer
+      // 1. Force state to false so the ghost component doesn't auto-restart
+      isListeningRef.current = false; 
+      
+      if (recognitionRef.current) {
+        // 2. Detach the auto-restart listener completely
+        recognitionRef.current.onend = null; 
+        try { recognitionRef.current.stop(); } catch(e) {}
+      }
+      
+      if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
